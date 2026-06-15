@@ -1,7 +1,6 @@
 # mpcith-zk
 
-MPC-in-the-Head Zero-Knowledge Proof library — Phase 1 of the MSc thesis implementation.
-
+MPC-in-the-Head Zero-Knowledge Proof library 
 ## What this is
 
 An implementation of the **MPC-in-the-Head (MPCitH)** paradigm for constructing
