@@ -1,0 +1,39 @@
+[package]
+name = "mpcith-zk"
+version = "0.1.0"
+edition = "2021"
+authors = ["Thesis Author"]
+description = "MPC-in-the-Head Zero-Knowledge Proof library for privacy-preserving blockchain validation"
+license = "MIT"
+
+[lib]
+name = "mpcith_zk"
+path = "src/lib.rs"
+
+[[bin]]
+name = "demo"
+path = "src/bin/demo.rs"
+
+[dependencies]
+blake3 = "1.5"
+sha3 = "0.10"
+rand = "0.8"
+rand_chacha = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bincode = "1.3"
+thiserror = "1.0"
+hex = "0.4"
+digest = "0.10"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "mpcith_bench"
+harness = false
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
