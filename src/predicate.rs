@@ -9,6 +9,8 @@
 //! - `SetMembership`: prove x ∈ {v1, ..., vk}  (Phase 2)
 
 use crate::circuit::{bit_decompose_on, Circuit, CircuitBuilder};
+use crate::merkle::MerkleTree;
+use crate::mimc::{build_mimc_hash, MIMC_ROUNDS};
 
 /// A predicate defines the statement being proven.
 #[derive(Debug, Clone)]
@@ -29,8 +31,9 @@ pub enum Predicate {
     RangeCheck { lo: u32, hi: u32 },
 
     /// Prove: witness[0] is in the set `members` (public list).
-    /// Implemented as a linear scan: OR of (witness[0] - m_i == 0) for each m_i.
-    /// Phase 2 will implement this with proper zero-check gates.
+    /// Implemented as a Merkle inclusion proof: the prover provides
+    /// (leaf, leaf_index, bits, siblings) and the circuit recomputes
+    /// the root via MiMC hashes, asserting it equals the public root.
     SetMembership { members: Vec<u32> },
 }
 
@@ -72,7 +75,10 @@ impl Predicate {
             Predicate::MultiplicationCheck { .. } => 2,
             Predicate::XorCheck { .. } => 2,
             Predicate::RangeCheck { .. } => 1,
-            Predicate::SetMembership { .. } => 1,
+            Predicate::SetMembership { members } => {
+                let depth = members.len().next_power_of_two().trailing_zeros() as usize;
+                2 + depth
+            }
         }
     }
 }
@@ -188,14 +194,15 @@ fn compile_range_check(lo: u32, hi: u32) -> crate::Result<CompiledPredicate> {
     })
 }
 
-/// Circuit: assert witness[0] ∈ members
+/// Circuit: assert leaf ∈ members via Merkle inclusion proof.
 ///
-/// Strategy: linear scan with zero-product trick.
-///   product = (x - m_0) * (x - m_1) * ... * (x - m_{k-1})
-///   assert product == 0
+/// At compile time the member set is hashed into a Merkle tree; the root
+/// becomes the sole public input. The private witness is
+/// `[leaf, leaf_index, bit_0..bit_{d-1}, sibling_0..sibling_{d-1}]`.
 ///
-/// If x equals any member, one factor is zero, so the product is zero.
-/// This requires k-1 multiplication gates.
+/// The circuit decomposes `leaf_index` into boolean bits, then iteratively
+/// hashes from the leaf upward using MiMC, selecting left/right ordering
+/// via the path bits. The final hash is asserted equal to the root.
 fn compile_set_membership(members: &[u32]) -> crate::Result<CompiledPredicate> {
     if members.is_empty() {
         return Err(crate::MpcithError::InvalidParams(
@@ -203,49 +210,66 @@ fn compile_set_membership(members: &[u32]) -> crate::Result<CompiledPredicate> {
         ));
     }
 
-    // Wire 0: witness x
-    // Wire 1: x - m_0
-    // Wire 2: x - m_1
-    // ...
-    // Wire k: x - m_{k-1}
-    // Wire k+1: (x-m_0) * (x-m_1)
-    // Wire k+2: prev * (x-m_2)
-    // ...
-    // Final wire: assert product == 0
+    let tree = MerkleTree::build(members);
+    let root = tree.root();
+    let depth = members.len().next_power_of_two().trailing_zeros() as usize;
 
-    let mut builder = CircuitBuilder::new(1);
+    // Wire layout:
+    //   0              : leaf
+    //   1              : leaf_index
+    //   2 .. 2+depth-1 : leaf_index bits (b_0 .. b_{depth-1})
+    //   2+depth .. 2+2*depth-1 : siblings
+    let total_inputs = 2 + 2 * depth;
+    let mut builder = CircuitBuilder::new(total_inputs);
 
-    // Compute (x - m_i) for each member.
-    let diff_wires: Vec<usize> = members
-        .iter()
-        .map(|&m| {
-            let neg_m = m.wrapping_neg();
-            builder.add_const(0, neg_m)
-        })
-        .collect();
+    let bit_wires: Vec<usize> = (2..2 + depth).collect();
+    let sibling_wires: Vec<usize> = (2 + depth..2 + 2 * depth).collect();
 
-    // Fold with multiplication: product = diff_wires[0] * diff_wires[1] * ...
-    let product_wire = if diff_wires.len() == 1 {
-        diff_wires[0]
-    } else {
-        let mut acc = builder.mul(diff_wires[0], diff_wires[1]);
-        for &w in &diff_wires[2..] {
-            acc = builder.mul(acc, w);
-        }
-        acc
-    };
+    // Constrain leaf_index bits (boolean + reconstruction).
+    bit_decompose_on(&mut builder, 1, &bit_wires);
 
-    // Assert product == 0.
-    let _out = builder.assert_eq(product_wire, 0);
+    // Walk up the tree.
+    let mut current = 0usize; // leaf wire
+    for i in 0..depth {
+        let bit = bit_wires[i];
+        let sibling = sibling_wires[i];
+
+        // not_bit = 1 - bit   (wrapping: bit·MAX + 1)
+        let not_bit = {
+            let t = builder.mul_const(bit, u32::MAX);
+            builder.add_const(t, 1)
+        };
+
+        // selected_left  = not_bit·current + bit·sibling
+        let selected_left = {
+            let a = builder.mul(not_bit, current);
+            let b = builder.mul(bit, sibling);
+            builder.add(a, b)
+        };
+
+        // selected_right = bit·current + not_bit·sibling
+        let selected_right = {
+            let a = builder.mul(bit, current);
+            let b = builder.mul(not_bit, sibling);
+            builder.add(a, b)
+        };
+
+        // MiMC hash — we only need the left output.
+        let (hash_left, _hash_right) =
+            build_mimc_hash(&mut builder, selected_left, selected_right, MIMC_ROUNDS);
+
+        current = hash_left;
+    }
+
+    // Assert computed root == public root.
+    let _out = builder.assert_eq(current, root);
+
     let circuit = builder.build(1);
 
-    // public_inputs for the proof system = expected output wire values.
-    // The member list is encoded in the circuit itself (as constants).
-    // The output wire must reconstruct to 0.
     Ok(CompiledPredicate {
         circuit,
-        public_inputs: vec![0u32],
-        witness_size: 1,
+        public_inputs: vec![root],
+        witness_size: 2 + depth,
     })
 }
 
@@ -272,15 +296,40 @@ mod tests {
     #[test]
     fn test_set_membership_predicate() {
         let members = vec![10u32, 20, 30, 42];
-        let pred = Predicate::SetMembership { members: members.clone() };
+        let tree = MerkleTree::build(&members);
+        let root = tree.root();
+        let pred = Predicate::SetMembership { members };
         let compiled = pred.compile().unwrap();
+        assert_eq!(compiled.public_inputs, vec![root]);
 
-        // Valid member.
-        compiled.circuit.evaluate(&[42]).unwrap();
-        compiled.circuit.evaluate(&[10]).unwrap();
+        // Witness for leaf 42 (index 3): [leaf, index, b0, b1, sib0, sib1]
+        let proof42 = tree.prove_membership(3);
+        let w42 = set_membership_witness(&proof42);
+        compiled.circuit.evaluate(&w42).unwrap();
 
-        // Not a member — product is non-zero, AssertEq should fail.
-        assert!(compiled.circuit.evaluate(&[99]).is_err());
+        // Witness for leaf 10 (index 0).
+        let proof10 = tree.prove_membership(0);
+        let w10 = set_membership_witness(&proof10);
+        compiled.circuit.evaluate(&w10).unwrap();
+
+        // Wrong leaf value — valid index but wrong leaf.
+        let mut bad_proof = tree.prove_membership(3);
+        bad_proof.leaf = 99;
+        let wbad = set_membership_witness(&bad_proof);
+        assert!(compiled.circuit.evaluate(&wbad).is_err());
+    }
+
+    /// Construct the full witness vector for the SetMembership circuit.
+    fn set_membership_witness(proof: &crate::merkle::MerkleProof) -> Vec<u32> {
+        let depth = proof.siblings.len();
+        let mut w = Vec::with_capacity(2 + 2 * depth);
+        w.push(proof.leaf);
+        w.push(proof.leaf_index as u32);
+        for i in 0..depth {
+            w.push(((proof.leaf_index >> i) & 1) as u32);
+        }
+        w.extend(&proof.siblings);
+        w
     }
 
     #[test]

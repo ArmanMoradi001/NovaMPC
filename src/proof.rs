@@ -333,9 +333,27 @@ mod tests {
     fn test_set_membership_prove_verify() {
         let params = fast_params();
         let members = vec![10u32, 20, 30, 42];
+        let tree = crate::merkle::MerkleTree::build(&members);
+        let root = tree.root();
         let pred = Predicate::SetMembership { members };
-        let proof = prove(pred, &[42], &[0u32], &params).unwrap();
-        assert!(verify(&proof, &[0u32], &params).unwrap());
+
+        let proof = tree.prove_membership(3);
+        let witness = set_membership_witness(&proof);
+        let compiled_proof = prove(pred, &witness, &[root], &params).unwrap();
+        assert!(verify(&compiled_proof, &[root], &params).unwrap());
+    }
+
+    /// Construct the full witness for SetMembership from a MerkleProof.
+    fn set_membership_witness(proof: &crate::merkle::MerkleProof) -> Vec<u32> {
+        let depth = proof.siblings.len();
+        let mut w = Vec::with_capacity(2 + 2 * depth);
+        w.push(proof.leaf);
+        w.push(proof.leaf_index as u32);
+        for i in 0..depth {
+            w.push(((proof.leaf_index >> i) & 1) as u32);
+        }
+        w.extend(&proof.siblings);
+        w
     }
 
     /// Build the full circuit witness for RangeCheck { lo, hi } with value x.
