@@ -167,6 +167,14 @@ impl CircuitBuilder {
         w
     }
 
+    /// Allocate a new input (witness) wire and return its index.
+    pub fn add_input(&mut self) -> usize {
+        let w = self.next_wire;
+        self.next_wire += 1;
+        self.num_inputs += 1;
+        w
+    }
+
     pub fn add(&mut self, left: usize, right: usize) -> usize {
         let output = self.alloc();
         self.gates.push(Gate::Add { left, right, output });
@@ -213,6 +221,43 @@ impl CircuitBuilder {
     }
 }
 
+/// Bit-decompose an input wire into `bit_count` individual bit wires.
+///
+/// Allocates `bit_count` new **input** wires for the prover to supply the
+/// bit values, then adds constraint gates that enforce:
+///   1. Each bit is boolean:  b_i * (b_i - 1) == 0
+///   2. Reconstruction:       Σ b_i · 2^i == input_wire
+///
+/// Returns the wire indices of the allocated bit wires (b_0 .. b_{n-1}).
+pub fn bit_decompose(
+    builder: &mut CircuitBuilder,
+    input_wire: usize,
+    bit_count: usize,
+) -> Vec<usize> {
+    let bit_wires: Vec<usize> = (0..bit_count).map(|_| builder.add_input()).collect();
+
+    // Boolean checks: b_i * (b_i - 1) == 0
+    for &b in &bit_wires {
+        let b_minus_1 = builder.add_const(b, u32::MAX); // b + (2^32-1) ≡ b - 1
+        let product = builder.mul(b, b_minus_1);
+        builder.assert_eq(product, 0);
+    }
+
+    // Reconstruction: sum = Σ b_i * 2^i
+    let mut sum = bit_wires[0];
+    for i in 1..bit_count {
+        let weighted = builder.mul_const(bit_wires[i], 1u32 << i);
+        sum = builder.add(sum, weighted);
+    }
+
+    // Assert sum == input_wire.
+    // XOR(a, a) == 0, so xor(sum, input_wire) should be 0 when equal.
+    let diff = builder.xor(sum, input_wire);
+    builder.assert_eq(diff, 0);
+
+    bit_wires
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,5 +287,59 @@ mod tests {
 
         let trace = circuit.evaluate(&[3, 4]).unwrap();
         assert_eq!(trace[2], 12);
+    }
+
+    #[test]
+    fn test_bit_decompose_42() {
+        let mut builder = CircuitBuilder::new(1);
+        let bits = bit_decompose(&mut builder, 0, 32);
+        let circuit = builder.build(0);
+
+        let value = 42u32;
+        let mut witness = vec![value];
+        for i in 0..32 {
+            witness.push((value >> i) & 1);
+        }
+
+        let trace = circuit.evaluate(&witness).unwrap();
+        for i in 0..32 {
+            let expected_bit = (value >> i) & 1;
+            assert_eq!(trace[bits[i]], expected_bit, "bit {i} mismatch");
+        }
+    }
+
+    #[test]
+    fn test_bit_decompose_rejects_non_bit() {
+        let mut builder = CircuitBuilder::new(1);
+        let _bits = bit_decompose(&mut builder, 0, 32);
+        let circuit = builder.build(0);
+
+        let value = 42u32;
+        let mut witness = vec![value];
+        for i in 0..32 {
+            if i == 3 {
+                witness.push(2); // not a valid boolean value
+            } else {
+                witness.push((value >> i) & 1);
+            }
+        }
+
+        assert!(circuit.evaluate(&witness).is_err());
+    }
+
+    #[test]
+    fn test_bit_decompose_reconstruction() {
+        for &value in &[0u32, 1, 255, 65535, u32::MAX] {
+            let mut builder = CircuitBuilder::new(1);
+            let _bits = bit_decompose(&mut builder, 0, 32);
+            let circuit = builder.build(0);
+
+            let mut witness = vec![value];
+            for i in 0..32 {
+                witness.push((value >> i) & 1);
+            }
+
+            assert!(circuit.evaluate(&witness).is_ok(), "Failed for value {value}");
+        }
     }
 }
