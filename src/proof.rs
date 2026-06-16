@@ -337,4 +337,76 @@ mod tests {
         let proof = prove(pred, &[42], &[0u32], &params).unwrap();
         assert!(verify(&proof, &[0u32], &params).unwrap());
     }
+
+    /// Build the full circuit witness for RangeCheck { lo, hi } with value x.
+    /// Layout: [x, x_bits(32), shifted_bits(k), slack_bits(k)]
+    fn range_witness(x: u32, lo: u32, hi: u32) -> Vec<u32> {
+        let width = hi.wrapping_sub(lo);
+        let k = if width == 0 {
+            1
+        } else {
+            (32 - width.leading_zeros()) as usize
+        };
+        let shifted = x.wrapping_sub(lo);
+        let slack = width.wrapping_sub(shifted);
+
+        let mut w = Vec::with_capacity(1 + 32 + k + k);
+        w.push(x);
+        for i in 0..32 {
+            w.push((x >> i) & 1);
+        }
+        for i in 0..k {
+            w.push((shifted >> i) & 1);
+        }
+        for i in 0..k {
+            w.push((slack >> i) & 1);
+        }
+        w
+    }
+
+    #[test]
+    fn test_range_proof_valid() {
+        let params = fast_params();
+        let pred = Predicate::RangeCheck { lo: 0, hi: 1000 };
+        let witness = range_witness(500, 0, 1000);
+        let proof = prove(pred, &witness, &[0, 1000], &params).unwrap();
+        assert!(verify(&proof, &[0, 1000], &params).unwrap());
+    }
+
+    #[test]
+    fn test_range_proof_boundary_lo() {
+        let params = fast_params();
+        let pred = Predicate::RangeCheck { lo: 0, hi: 1000 };
+        let witness = range_witness(0, 0, 1000);
+        let proof = prove(pred, &witness, &[0, 1000], &params).unwrap();
+        assert!(verify(&proof, &[0, 1000], &params).unwrap());
+    }
+
+    #[test]
+    fn test_range_proof_boundary_hi() {
+        let params = fast_params();
+        let pred = Predicate::RangeCheck { lo: 0, hi: 1000 };
+        let witness = range_witness(1000, 0, 1000);
+        let proof = prove(pred, &witness, &[0, 1000], &params).unwrap();
+        assert!(verify(&proof, &[0, 1000], &params).unwrap());
+    }
+
+    #[test]
+    fn test_range_proof_invalid_witness() {
+        let params = fast_params();
+        let pred = Predicate::RangeCheck { lo: 0, hi: 1000 };
+        let witness = range_witness(1500, 0, 1000);
+        assert!(prove(pred, &witness, &[0, 1000], &params).is_err());
+    }
+
+    #[test]
+    fn test_range_proof_secure_params() {
+        let params = ProofParams::balanced();
+        let pred = Predicate::RangeCheck { lo: 0, hi: 1000 };
+        let witness = range_witness(500, 0, 1000);
+        let proof = prove(pred, &witness, &[0, 1000], &params).unwrap();
+        let size = proof.serialized_size();
+        println!("Range proof size (balanced params, N=16 M=38): {} bytes", size);
+        assert!(verify(&proof, &[0, 1000], &params).unwrap());
+    }
 }
