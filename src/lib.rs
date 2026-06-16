@@ -17,6 +17,7 @@ pub mod circuit;
 pub mod commitment;
 pub mod error;
 pub mod fiat_shamir;
+pub mod merkle;
 pub mod mimc;
 pub mod mpc;
 pub mod params;
