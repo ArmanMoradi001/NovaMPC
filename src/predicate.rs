@@ -8,7 +8,7 @@
 //! - `RangeCheck`: prove lo <= x <= hi  (Phase 2)
 //! - `SetMembership`: prove x ∈ {v1, ..., vk}  (Phase 2)
 
-use crate::circuit::{Circuit, CircuitBuilder};
+use crate::circuit::{bit_decompose_on, Circuit, CircuitBuilder};
 
 /// A predicate defines the statement being proven.
 #[derive(Debug, Clone)]
@@ -120,21 +120,25 @@ fn compile_xor_check(expected_xor: u32) -> crate::Result<CompiledPredicate> {
     })
 }
 
+/// Minimum number of bits needed to represent any value in [0, `max_val`].
+fn bits_needed(max_val: u32) -> usize {
+    if max_val == 0 {
+        return 1;
+    }
+    (u32::BITS - max_val.leading_zeros()) as usize
+}
+
 /// Circuit: assert lo <= witness[0] <= hi
 ///
-/// Strategy (simplified, for u32):
-///   shifted = witness[0] - lo               (should be >= 0 if witness >= lo)
-///   width   = hi - lo
-///   We assert shifted <= width by asserting shifted * (shifted - width - 1) wraps
-///   correctly. This is a placeholder; Phase 2 implements bit decomposition.
+/// Strategy:
+///   1. bit_decompose(x, 32) — enforces boolean + reconstruction on x's bits
+///   2. shifted = x - lo  (wrapping)
+///   3. bit_decompose(shifted, k) — enforces 0 ≤ shifted < 2^k
+///   4. slack = width - shifted  (wrapping)
+///   5. bit_decompose(slack, k) — enforces 0 ≤ slack < 2^k
 ///
-/// For now: compile as two assertions using the trick that
-///   lo <= x <= hi  iff  (x - lo) <= (hi - lo)
-/// We implement this as a multiplication-based range check:
-///   assert (x - lo) * (hi - x + 1) != 0  ... (not quite right)
-///
-/// SIMPLIFIED PLACEHOLDER: assert (x - lo + 0) and (hi - x + 0) are "valid"
-/// by asserting their sum equals (hi - lo). Full bit-decomposition in Phase 2.
+/// Since shifted + slack = width and both are ≥ 0, we get 0 ≤ shifted ≤ width.
+/// k = bits_needed(width) ensures 2^k > width, so the bit range is tight enough.
 fn compile_range_check(lo: u32, hi: u32) -> crate::Result<CompiledPredicate> {
     if lo > hi {
         return Err(crate::MpcithError::InvalidParams(
@@ -142,32 +146,38 @@ fn compile_range_check(lo: u32, hi: u32) -> crate::Result<CompiledPredicate> {
         ));
     }
 
-    // Circuit:
-    //   wire 0: witness x
-    //   wire 1: x - lo   (= shifted_x, must satisfy 0 <= shifted_x <= hi-lo)
-    //   wire 2: hi - lo  (constant, public)
-    //   wire 3: (hi-lo) - shifted_x  (= hi - x, must be >= 0)
-    //   wire 4: shifted_x + ((hi-lo) - shifted_x)  must == (hi-lo)  [sanity]
-    //   wire 5: assert wire4 == (hi-lo)
-    //
-    // NOTE: This does NOT fully enforce the range in Z_{2^32} arithmetic
-    // without bit decomposition. It is a structural placeholder showing
-    // the circuit shape. Full range proof via bit decomposition is Phase 2.
-
     let width = hi.wrapping_sub(lo);
+    let k = bits_needed(width);
 
-    let mut builder = CircuitBuilder::new(1); // witness: wire 0 = x
-    // shifted_x = x - lo = x + (2^32 - lo)  [wrapping subtraction]
+    // Pre-allocate ALL input wires so they sit contiguously at the start.
+    // Layout: [x, x_bits(32), shifted_bits(k), slack_bits(k)]
+    let total_inputs = 1 + 32 + k + k;
+    let mut builder = CircuitBuilder::new(total_inputs);
+
+    let x_bits: Vec<usize> = (1..=32).collect();
+    let shifted_bits: Vec<usize> = (33..33 + k).collect();
+    let slack_bits: Vec<usize> = (33 + k..33 + 2 * k).collect();
+
+    // Constraint gates for x bits (boolean + reconstruction)
+    bit_decompose_on(&mut builder, 0, &x_bits);
+
+    // shifted = x - lo (wrapping)
     let neg_lo = lo.wrapping_neg();
-    let shifted = builder.add_const(0, neg_lo);       // wire 1: x - lo (wrapping)
-    // upper_slack = (hi - lo) - shifted_x = width - shifted_x (wrapping)
-    let neg_shifted = builder.mul_const(shifted, u32::MAX); // wire 2: -shifted (wrapping, * (2^32-1) not quite neg)
-    // Proper negate: -a = a.wrapping_neg() = add_const(mul_const(a, 0xFFFFFFFF), 1)
-    let neg_shifted_fixed = builder.add_const(neg_shifted, 1); // wire 3: -shifted_x
-    let upper_slack = builder.add_const(neg_shifted_fixed, width); // wire 4: width - shifted_x
-    // Assert: shifted + upper_slack == width  (i.e., they are complementary)
-    let sum = builder.add(shifted, upper_slack);       // wire 5: shifted + upper_slack
-    let _out = builder.assert_eq(sum, width);          // wire 6
+    let shifted = builder.add_const(0, neg_lo);
+
+    // Constraint gates for shifted bits
+    bit_decompose_on(&mut builder, shifted, &shifted_bits);
+
+    // slack = width - shifted (wrapping)
+    let neg_shifted = builder.mul_const(shifted, u32::MAX);
+    let slack = builder.add_const(neg_shifted, width);
+
+    // Constraint gates for slack bits
+    bit_decompose_on(&mut builder, slack, &slack_bits);
+
+    // Output wire: constant 0
+    let zero = builder.mul_const(0, 0); // x * 0 = 0
+    let _out = builder.assert_eq(zero, 0);
 
     let circuit = builder.build(1);
 
@@ -278,5 +288,69 @@ mod tests {
         let pred = Predicate::RangeCheck { lo: 10, hi: 100 };
         let compiled = pred.compile().unwrap();
         assert!(compiled.circuit.num_wires > 0);
+    }
+
+    /// Build a full witness for RangeCheck { lo, hi } with value x.
+    /// Layout: [x, x_bits(32), shifted_bits(k), slack_bits(k)]
+    fn range_witness(x: u32, lo: u32, hi: u32) -> Vec<u32> {
+        let width = hi.wrapping_sub(lo);
+        let k = bits_needed(width);
+        let shifted = x.wrapping_sub(lo);
+        let slack = width.wrapping_sub(shifted);
+
+        let mut w = Vec::with_capacity(1 + 32 + k + k);
+        w.push(x);
+        for i in 0..32 {
+            w.push((x >> i) & 1);
+        }
+        for i in 0..k {
+            w.push((shifted >> i) & 1);
+        }
+        for i in 0..k {
+            w.push((slack >> i) & 1);
+        }
+        w
+    }
+
+    #[test]
+    fn test_range_check_42() {
+        let pred = Predicate::RangeCheck { lo: 10, hi: 100 };
+        let compiled = pred.compile().unwrap();
+        let witness = range_witness(42, 10, 100);
+        let trace = compiled.circuit.evaluate(&witness).unwrap();
+        let out_start = compiled.circuit.num_wires - compiled.circuit.num_outputs;
+        assert_eq!(trace[out_start], 0);
+    }
+
+    #[test]
+    fn test_range_check_at_lo() {
+        let pred = Predicate::RangeCheck { lo: 10, hi: 100 };
+        let compiled = pred.compile().unwrap();
+        let witness = range_witness(10, 10, 100);
+        compiled.circuit.evaluate(&witness).unwrap();
+    }
+
+    #[test]
+    fn test_range_check_at_hi() {
+        let pred = Predicate::RangeCheck { lo: 10, hi: 100 };
+        let compiled = pred.compile().unwrap();
+        let witness = range_witness(100, 10, 100);
+        compiled.circuit.evaluate(&witness).unwrap();
+    }
+
+    #[test]
+    fn test_range_check_below_lo() {
+        let pred = Predicate::RangeCheck { lo: 10, hi: 100 };
+        let compiled = pred.compile().unwrap();
+        let witness = range_witness(9, 10, 100);
+        assert!(compiled.circuit.evaluate(&witness).is_err());
+    }
+
+    #[test]
+    fn test_range_check_above_hi() {
+        let pred = Predicate::RangeCheck { lo: 10, hi: 100 };
+        let compiled = pred.compile().unwrap();
+        let witness = range_witness(101, 10, 100);
+        assert!(compiled.circuit.evaluate(&witness).is_err());
     }
 }

@@ -235,9 +235,25 @@ pub fn bit_decompose(
     bit_count: usize,
 ) -> Vec<usize> {
     let bit_wires: Vec<usize> = (0..bit_count).map(|_| builder.add_input()).collect();
+    bit_decompose_on(builder, input_wire, &bit_wires);
+    bit_wires
+}
+
+/// Like [`bit_decompose`] but uses caller-provided wire indices for the bits
+/// instead of allocating new input wires.  Useful when all input wires must
+/// be allocated up-front (e.g. multiple decompositions in one circuit).
+pub fn bit_decompose_on(
+    builder: &mut CircuitBuilder,
+    input_wire: usize,
+    bit_wires: &[usize],
+) {
+    let bit_count = bit_wires.len();
+    if bit_count == 0 {
+        return;
+    }
 
     // Boolean checks: b_i * (b_i - 1) == 0
-    for &b in &bit_wires {
+    for &b in bit_wires {
         let b_minus_1 = builder.add_const(b, u32::MAX); // b + (2^32-1) ≡ b - 1
         let product = builder.mul(b, b_minus_1);
         builder.assert_eq(product, 0);
@@ -254,8 +270,6 @@ pub fn bit_decompose(
     // XOR(a, a) == 0, so xor(sum, input_wire) should be 0 when equal.
     let diff = builder.xor(sum, input_wire);
     builder.assert_eq(diff, 0);
-
-    bit_wires
 }
 
 #[cfg(test)]
