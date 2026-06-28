@@ -6,6 +6,7 @@
 use mpcith_zk::merkle::MerkleTree;
 use mpcith_zk::params::ProofParams;
 use mpcith_zk::predicate::Predicate;
+use mpcith_zk::proof::Proof;
 use mpcith_zk::{prove, verify};
 use std::time::Instant;
 
@@ -222,11 +223,174 @@ fn test_soundness_parameter_sweep() {
 
     for &n in &party_counts {
         for &m in &rep_counts {
-            // soundness ≈ (N/(N-1))^M  →  bits = M * log2(N/(N-1))
-            let ratio = (n as f64) / ((n - 1) as f64);
-            let bits = (m as f64) * ratio.log2();
+            // soundness ≈ (1/N)^M  →  bits = M * log2(N)
+            let bits = (m as f64) * ((n as f64).log2());
             assert!(bits > 0.0, "soundness bits must be positive");
             println!("{:<6} {:<6} {:>12.2}", n, m, bits);
         }
+    }
+}
+
+// ─── tamper-resistance smoke tests ───────────────────────────────────────────
+
+fn make_addition_proof() -> Proof {
+    let params = ProofParams::fast_insecure();
+    let pred = Predicate::AdditionCheck { expected_sum: 7 };
+    prove(pred, &[3, 4], &[7], &params).unwrap()
+}
+
+#[test]
+fn test_tampered_commitment_rejected() {
+    let mut proof = make_addition_proof();
+    // Flip one bit in the first commitment of the first repetition.
+    proof.repetitions[0].commitments[0].0[0] ^= 0x01;
+    let result = verify(&proof, &[7], &ProofParams::fast_insecure());
+    assert!(result.is_err(), "tampered commitment must cause Err, not Ok(false)");
+}
+
+#[test]
+fn test_tampered_opened_view_rejected() {
+    let mut proof = make_addition_proof();
+    // Flip the output wire share — this is checked during reconstruction.
+    // AdditionCheck: num_wires=4, num_outputs=1, output_start=3.
+    let output_wire = proof.num_circuit_wires - proof.num_circuit_outputs;
+    proof.repetitions[0].opened_views[0].view.wire_shares[output_wire] ^= 0xFF;
+    let result = verify(&proof, &[7], &ProofParams::fast_insecure());
+    assert!(result.is_err(), "tampered output wire share must cause Err, not Ok(false)");
+}
+
+#[test]
+fn test_tampered_hidden_party_rejected() {
+    let mut proof = make_addition_proof();
+    let original = proof.repetitions[0].hidden_party;
+    // Change to a different valid party index.
+    let alternative = if original == 0 { 1 } else { 0 };
+    proof.repetitions[0].hidden_party = alternative;
+    let result = verify(&proof, &[7], &ProofParams::fast_insecure());
+    assert!(result.is_err(), "tampered hidden_party must cause Err, not Ok(false)");
+}
+
+#[test]
+fn test_tampered_intermediate_wire_rejected() {
+    let mut proof = make_addition_proof();
+    // Flip a NON-output wire share (wire 0 = witness input x).
+    // AdditionCheck: num_wires=4, num_outputs=1, output_start=3.
+    // Wire 0 is an input wire — not an output, so this was previously undetected.
+    proof.repetitions[0].opened_views[0].view.wire_shares[0] ^= 0xFF;
+    let result = verify(&proof, &[7], &ProofParams::fast_insecure());
+    assert!(result.is_err(), "tampered intermediate wire must now cause Err via verify_party_view");
+}
+
+#[test]
+fn test_hidden_party_view_not_leaked() {
+    let proof = make_addition_proof();
+    for (rep_idx, rep) in proof.repetitions.iter().enumerate() {
+        for opened in &rep.opened_views {
+            assert_ne!(
+                opened.view.party_idx, rep.hidden_party,
+                "repetition {rep_idx}: opened view contains hidden party {} — ZK leak",
+                rep.hidden_party
+            );
+        }
+        assert_eq!(
+            rep.opened_views.len(),
+            ProofParams::fast_insecure().num_parties - 1,
+            "repetition {rep_idx}: expected N-1 opened views"
+        );
+    }
+}
+
+// Note: test_forged_membership_leaf_rejected is already covered by
+// test_membership_non_member_rejected (line ~178) which sets leaf=99.
+
+// ─── proof size blowup diagnostic ────────────────────────────────────────────
+
+#[test]
+fn test_proof_size_blowup_diagnostic() {
+    let params = ProofParams::balanced();
+    let n = params.num_parties;
+    let m = params.num_repetitions;
+
+    println!("\n=== Proof Size Blowup Diagnostic ===\n");
+
+    // ── RangeCheck(0, MAX/2) ──────────────────────────────────────────────
+    {
+        let lo = 0u32;
+        let hi = u32::MAX / 2;
+        let x = u32::MAX / 4;
+        let pred = Predicate::RangeCheck { lo, hi };
+        let compiled = pred.compile().unwrap();
+        let witness = range_witness(x, lo, hi);
+        let circuit = &compiled.circuit;
+        let mul_gates = circuit.num_mul_gates();
+        let total_gates = circuit.gates.len();
+        let num_wires = circuit.num_wires;
+
+        let proof = prove(pred, &witness, &[lo, hi], &params).unwrap();
+        let proof_bytes = proof.serialized_size();
+
+        let sample_view = &proof.repetitions[0].opened_views[0].view;
+        let broadcast_ser = bincode::serialize(&sample_view.broadcast_messages).unwrap();
+        let shares_ser = bincode::serialize(&sample_view.wire_shares).unwrap();
+
+        println!("--- RangeCheck(0, MAX/2) ---");
+        println!("  gates: {total_gates}  (mul: {mul_gates})  wires: {num_wires}");
+        println!("  single PartyView:");
+        println!("    broadcast_messages: {} msgs, {} bytes", sample_view.broadcast_messages.len(), broadcast_ser.len());
+        println!("    wire_shares:       {} words, {} bytes", sample_view.wire_shares.len(), shares_ser.len());
+
+        let avg = proof_bytes as f64 / (m as f64 * n as f64);
+        let theoretical_min = sample_view.wire_shares.len() * 4;
+        println!("  proof_bytes: {proof_bytes}");
+        println!("  avg bytes/party/rep: {avg:.0}  (theoretical min if shares-only: {theoretical_min})");
+        println!("  blowup factor: {:.1}x", avg / theoretical_min as f64);
+
+        let msgs_per_party = sample_view.broadcast_messages.len();
+        let expected_if_full_copy = mul_gates * n;
+        let redundant = msgs_per_party == expected_if_full_copy;
+        println!("  broadcast msgs/party: {msgs_per_party}  (mul gates: {mul_gates}, if full N-copy: {expected_if_full_copy})");
+        println!("  redundant full N-copy per gate per party? {redundant}");
+        println!();
+    }
+
+    // ── SetMembership(8) ──────────────────────────────────────────────────
+    {
+        let members: Vec<u32> = vec![10, 20, 30, 42, 50, 60, 70, 80];
+        let tree = MerkleTree::build(&members);
+        let root = tree.root();
+        let pred = Predicate::SetMembership { members };
+        let compiled = pred.compile().unwrap();
+        let mp = tree.prove_membership(0);
+        let witness = membership_witness(&mp);
+        let circuit = &compiled.circuit;
+        let mul_gates = circuit.num_mul_gates();
+        let total_gates = circuit.gates.len();
+        let num_wires = circuit.num_wires;
+
+        let proof = prove(pred, &witness, &[root], &params).unwrap();
+        let proof_bytes = proof.serialized_size();
+
+        let sample_view = &proof.repetitions[0].opened_views[0].view;
+        let broadcast_ser = bincode::serialize(&sample_view.broadcast_messages).unwrap();
+        let shares_ser = bincode::serialize(&sample_view.wire_shares).unwrap();
+
+        println!("--- SetMembership(8) ---");
+        println!("  gates: {total_gates}  (mul: {mul_gates})  wires: {num_wires}");
+        println!("  single PartyView:");
+        println!("    broadcast_messages: {} msgs, {} bytes", sample_view.broadcast_messages.len(), broadcast_ser.len());
+        println!("    wire_shares:       {} words, {} bytes", sample_view.wire_shares.len(), shares_ser.len());
+
+        let avg = proof_bytes as f64 / (m as f64 * n as f64);
+        let theoretical_min = sample_view.wire_shares.len() * 4;
+        println!("  proof_bytes: {proof_bytes}");
+        println!("  avg bytes/party/rep: {avg:.0}  (theoretical min if shares-only: {theoretical_min})");
+        println!("  blowup factor: {:.1}x", avg / theoretical_min as f64);
+
+        let msgs_per_party = sample_view.broadcast_messages.len();
+        let expected_if_full_copy = mul_gates * n;
+        let redundant = msgs_per_party == expected_if_full_copy;
+        println!("  broadcast msgs/party: {msgs_per_party}  (mul gates: {mul_gates}, if full N-copy: {expected_if_full_copy})");
+        println!("  redundant full N-copy per gate per party? {redundant}");
+        println!();
     }
 }
