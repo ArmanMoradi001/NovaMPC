@@ -89,9 +89,7 @@ pub fn run_mpc_emulation<R: RngCore + CryptoRng>(
                     })
                     .collect();
                 for p in 0..num_parties {
-                    for b in &broadcasts {
-                        party_broadcasts[p].push(b.clone());
-                    }
+                    party_broadcasts[p].push(broadcasts[p].clone());
                 }
                 let x = shared_trace.wires[*left].reconstruct();
                 let y = shared_trace.wires[*right].reconstruct();
