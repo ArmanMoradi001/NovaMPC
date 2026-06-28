@@ -1,9 +1,10 @@
 //! Top-level proof generation and verification.
 
 use crate::{
+    circuit::Circuit,
     commitment::{commit_view, CommitmentMatrix},
     fiat_shamir::{derive_challenges, hash_circuit},
-    mpc::{run_mpc_emulation, MpcExecution, PartyView},
+    mpc::{run_mpc_emulation, verify_party_view, MpcExecution, PartyView},
     params::ProofParams,
     predicate::Predicate,
     sharing::PartySeed,
@@ -40,6 +41,8 @@ pub struct Proof {
     pub expected_outputs: Vec<u32>,
     pub repetitions: Vec<RepetitionProof>,
     pub params: ProofParams,
+    /// The circuit used to generate this proof (needed for view consistency checks).
+    pub circuit: Circuit,
     /// Circuit hash for Fiat-Shamir binding.
     pub circuit_hash: Vec<u8>,
     /// Total number of wires in the circuit (so verifier knows output wire indices).
@@ -154,6 +157,7 @@ pub fn prove(
         expected_outputs,
         repetitions: repetition_proofs,
         params: params.clone(),
+        circuit: circuit.clone(),
         circuit_hash,
         num_circuit_wires: circuit.num_wires,
         num_circuit_outputs: circuit.num_outputs,
@@ -177,6 +181,14 @@ pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Res
             params.num_repetitions,
             proof.repetitions.len()
         )));
+    }
+
+    // Verify the embedded circuit hash matches the committed one.
+    let embedded_hash = hash_circuit(&proof.circuit);
+    if embedded_hash != proof.circuit_hash {
+        return Err(MpcithError::VerificationFailed(
+            "Embedded circuit hash does not match proof circuit_hash".into(),
+        ));
     }
 
     let num_parties = params.num_parties;
@@ -218,9 +230,11 @@ pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Res
             )));
         }
 
-        // Verify commitments for all opened views.
+        // Verify commitments and view consistency for all opened views.
         for opened in &rep_proof.opened_views {
             let p = opened.view.party_idx;
+
+            // Check commitment.
             let recomputed = commit_view(
                 rep,
                 p,
@@ -231,6 +245,11 @@ pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Res
             if recomputed != rep_proof.commitments[p] {
                 return Err(MpcithError::CommitmentMismatch { party: p, repetition: rep });
             }
+
+            // Check that the party's wire_shares are internally consistent
+            // with the circuit's gate logic (Add, AddConst, MulConst, and
+            // Mul broadcast messages).
+            verify_party_view(&proof.circuit, &opened.view, public_inputs, num_parties)?;
         }
 
         // Verify output share consistency.
