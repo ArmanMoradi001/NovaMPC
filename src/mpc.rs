@@ -13,10 +13,12 @@ use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 
 /// Broadcast message for a multiplication gate.
+/// `sender` and `output_wire` are omitted: the sender is always the
+/// owning party (recorded in `PartyView::party_idx`), and the gate index
+/// is implicit from the position in the list — the i-th message
+/// corresponds to the i-th Mul gate encountered in circuit order.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BroadcastMessage {
-    pub sender: usize,
-    pub output_wire: usize,
     pub left_share: u32,
     pub right_share: u32,
 }
@@ -36,8 +38,6 @@ impl PartyView {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&self.seed);
         for msg in &self.broadcast_messages {
-            bytes.extend_from_slice(&msg.sender.to_le_bytes());
-            bytes.extend_from_slice(&msg.output_wire.to_le_bytes());
             bytes.extend_from_slice(&msg.left_share.to_le_bytes());
             bytes.extend_from_slice(&msg.right_share.to_le_bytes());
         }
@@ -68,49 +68,75 @@ pub fn run_mpc_emulation<R: RngCore + CryptoRng>(
 
     // Share the witness wires additively.
     for &value in witness.iter() {
-        shared_trace.wires.push(Sharing::share(value, num_parties, rng));
+        shared_trace
+            .wires
+            .push(Sharing::share(value, num_parties, rng));
     }
 
     // Evaluate gates. All outputs are stored as additive sharings.
     for gate in &circuit.gates {
         match gate {
-            Gate::Add { left, right, output: _ } => {
+            Gate::Add {
+                left,
+                right,
+                output: _,
+            } => {
                 let s = shared_trace.wires[*left].add(&shared_trace.wires[*right]);
                 shared_trace.wires.push(s);
             }
-            Gate::Mul { left, right, output } => {
-                // Broadcast left+right shares, then reconstruct and re-share.
-                let broadcasts: Vec<BroadcastMessage> = (0..num_parties)
-                    .map(|p| BroadcastMessage {
-                        sender: p,
-                        output_wire: *output,
+            Gate::Mul {
+                left,
+                right,
+                output: _,
+            } => {
+                // Each party records only its own shares; sender and gate index
+                // are implicit (see BroadcastMessage docs).
+                for p in 0..num_parties {
+                    party_broadcasts[p].push(BroadcastMessage {
                         left_share: shared_trace.wires[*left].shares[p],
                         right_share: shared_trace.wires[*right].shares[p],
-                    })
-                    .collect();
-                for p in 0..num_parties {
-                    party_broadcasts[p].push(broadcasts[p].clone());
+                    });
                 }
                 let x = shared_trace.wires[*left].reconstruct();
                 let y = shared_trace.wires[*right].reconstruct();
-                shared_trace.wires.push(Sharing::share(x.wrapping_mul(y), num_parties, rng));
+                shared_trace
+                    .wires
+                    .push(Sharing::share(x.wrapping_mul(y), num_parties, rng));
             }
-            Gate::Xor { left, right, output: _ } => {
+            Gate::Xor {
+                left,
+                right,
+                output: _,
+            } => {
                 // Reconstruct, XOR, re-share additively.
                 let x = shared_trace.wires[*left].reconstruct();
                 let y = shared_trace.wires[*right].reconstruct();
-                shared_trace.wires.push(Sharing::share(x ^ y, num_parties, rng));
+                shared_trace
+                    .wires
+                    .push(Sharing::share(x ^ y, num_parties, rng));
             }
-            Gate::AddConst { input, constant, output: _ } => {
+            Gate::AddConst {
+                input,
+                constant,
+                output: _,
+            } => {
                 // Add constant to party 0's share only.
                 let s = shared_trace.wires[*input].add_const(*constant);
                 shared_trace.wires.push(s);
             }
-            Gate::MulConst { input, constant, output: _ } => {
+            Gate::MulConst {
+                input,
+                constant,
+                output: _,
+            } => {
                 let s = shared_trace.wires[*input].mul_const(*constant);
                 shared_trace.wires.push(s);
             }
-            Gate::AssertEq { input, expected: _, output: _ } => {
+            Gate::AssertEq {
+                input,
+                expected: _,
+                output: _,
+            } => {
                 let s = shared_trace.wires[*input].clone();
                 shared_trace.wires.push(s);
             }
@@ -131,7 +157,11 @@ pub fn run_mpc_emulation<R: RngCore + CryptoRng>(
         })
         .collect();
 
-    Ok(MpcExecution { views, shared_trace, output_values })
+    Ok(MpcExecution {
+        views,
+        shared_trace,
+        output_values,
+    })
 }
 
 /// Verify a single party's view is consistent with linear gates.
@@ -146,28 +176,43 @@ pub fn verify_party_view(
     let ws = &view.wire_shares;
 
     // Check multiplication broadcast consistency.
-    for msg in view.broadcast_messages.iter().filter(|m| m.sender == view.party_idx) {
-        for gate in &circuit.gates {
-            if let Gate::Mul { left, right, output } = gate {
-                if *output == msg.output_wire {
-                    if msg.left_share != ws[*left] || msg.right_share != ws[*right] {
-                        return Err(crate::MpcithError::ConsistencyCheckFailed(view.party_idx));
-                    }
-                }
+    // The i-th BroadcastMessage corresponds to the i-th Mul gate in circuit order.
+    let mul_gates: Vec<(usize, usize)> = circuit
+        .gates
+        .iter()
+        .filter_map(|g| {
+            if let Gate::Mul { left, right, .. } = g {
+                Some((*left, *right))
+            } else {
+                None
             }
+        })
+        .collect();
+
+    for (msg, (left, right)) in view.broadcast_messages.iter().zip(mul_gates.iter()) {
+        if msg.left_share != ws[*left] || msg.right_share != ws[*right] {
+            return Err(crate::MpcithError::ConsistencyCheckFailed(view.party_idx));
         }
     }
 
     // Check linear gates locally.
     for gate in &circuit.gates {
         match gate {
-            Gate::Add { left, right, output } => {
+            Gate::Add {
+                left,
+                right,
+                output,
+            } => {
                 let expected = ws[*left].wrapping_add(ws[*right]);
                 if ws[*output] != expected {
                     return Err(crate::MpcithError::ConsistencyCheckFailed(view.party_idx));
                 }
             }
-            Gate::AddConst { input, constant, output } => {
+            Gate::AddConst {
+                input,
+                constant,
+                output,
+            } => {
                 // Only party 0 gets the constant added.
                 let expected = if view.party_idx == 0 {
                     ws[*input].wrapping_add(*constant)
@@ -178,7 +223,11 @@ pub fn verify_party_view(
                     return Err(crate::MpcithError::ConsistencyCheckFailed(view.party_idx));
                 }
             }
-            Gate::MulConst { input, constant, output } => {
+            Gate::MulConst {
+                input,
+                constant,
+                output,
+            } => {
                 let expected = ws[*input].wrapping_mul(*constant);
                 if ws[*output] != expected {
                     return Err(crate::MpcithError::ConsistencyCheckFailed(view.party_idx));
