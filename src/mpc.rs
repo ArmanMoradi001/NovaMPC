@@ -27,6 +27,10 @@ pub struct BroadcastMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PartyView {
     pub party_idx: usize,
+    /// The party's 32-byte seed. Skipped during serialization — the verifier
+    /// reconstructs it from the seed-tree co-path instead of reading it from
+    /// the proof, saving (N‑1) × 32 bytes per repetition.
+    #[serde(skip)]
     pub seed: [u8; 32],
     pub broadcast_messages: Vec<BroadcastMessage>,
     /// All wire shares for this party (one per wire, additive domain).
@@ -37,6 +41,20 @@ impl PartyView {
     pub fn to_commitment_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&self.seed);
+        for msg in &self.broadcast_messages {
+            bytes.extend_from_slice(&msg.left_share.to_le_bytes());
+            bytes.extend_from_slice(&msg.right_share.to_le_bytes());
+        }
+        bytes
+    }
+
+    /// Like [`to_commitment_bytes`](Self::to_commitment_bytes) but uses an
+    /// externally-supplied seed instead of `self.seed`.  This is needed during
+    /// verification where `self.seed` is not serialized (serde skip) and must
+    /// be reconstructed from the seed-tree co-path first.
+    pub fn to_commitment_bytes_with_seed(&self, seed: &[u8; 32]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(seed);
         for msg in &self.broadcast_messages {
             bytes.extend_from_slice(&msg.left_share.to_le_bytes());
             bytes.extend_from_slice(&msg.right_share.to_le_bytes());

@@ -326,6 +326,22 @@ fn test_hidden_party_view_not_leaked() {
     }
 }
 
+#[test]
+fn test_tampered_co_path_rejected() {
+    let mut proof = make_addition_proof();
+    // Flip one byte in the last (highest-level) co-path node. This node
+    // covers at least half the tree, so it always affects at least one
+    // real party's reconstructed seed, causing commitment verification
+    // to fail.
+    let last = proof.repetitions[0].co_path.len() - 1;
+    proof.repetitions[0].co_path[last][0] ^= 0x01;
+    let result = verify(&proof, &[7], &ProofParams::fast_insecure());
+    assert!(
+        result.is_err(),
+        "tampered co_path must cause Err — seed reconstruction produces wrong commitments"
+    );
+}
+
 // Note: test_forged_membership_leaf_rejected is already covered by
 // test_membership_non_member_rejected (line ~178) which sets leaf=99.
 

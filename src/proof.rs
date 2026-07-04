@@ -9,6 +9,7 @@ use crate::{
     mpc::{run_mpc_emulation, verify_party_view, MpcExecution, PartyView},
     params::ProofParams,
     predicate::Predicate,
+    seed_tree::{SeedTree, reconstruct_leaves_from_co_path},
     sharing::PartySeed,
     MpcithError, Result,
 };
@@ -66,6 +67,12 @@ pub struct RepetitionProof {
     /// commitment is never transmitted; the root binds all N commitments and
     /// serves as the Fiat-Shamir input for this repetition.
     pub commitment_root: u32,
+    /// GGM seed-tree co-path for the hidden party. Contains
+    /// log₂(N_padded) sibling seeds (32 bytes each), ordered from leaf
+    /// level up to just below root. The verifier reconstructs all N-1
+    /// opened parties' seeds from this co-path instead of receiving them
+    /// individually.
+    pub co_path: Vec<[u8; 32]>,
     /// Opened views for all parties except hidden_party.
     pub opened_views: Vec<OpenedView>,
     /// Hidden party's share of each output wire.
@@ -124,12 +131,22 @@ pub fn prove(
     // ── Phase 1: Commit ────────────────────────────────────────────────────
     let mut all_executions: Vec<MpcExecution> = Vec::with_capacity(num_repetitions);
     let mut all_commitment_randomness: Vec<Vec<[u8; 32]>> = Vec::with_capacity(num_repetitions);
+    let mut all_root_seeds: Vec<[u8; 32]> = Vec::with_capacity(num_repetitions);
     let mut commit_matrix = CommitmentMatrix::new(num_repetitions, num_parties);
 
     for rep in 0..num_repetitions {
-        let seeds: Vec<PartySeed> = (0..num_parties)
-            .map(|_| PartySeed::random(&mut rng))
-            .collect();
+        // Generate a single root seed per repetition; derive all N party seeds
+        // via the GGM seed tree so the prover can reveal a co-path instead of
+        // N-1 individual 32-byte seeds.
+        let root_seed: [u8; 32] = {
+            let mut s = [0u8; 32];
+            use rand::RngCore;
+            rng.fill_bytes(&mut s);
+            s
+        };
+        all_root_seeds.push(root_seed);
+        let tree = SeedTree::build(root_seed, num_parties);
+        let seeds: Vec<PartySeed> = tree.leaf_seeds().into_iter().map(PartySeed).collect();
 
         let exec = run_mpc_emulation(circuit, witness, &seeds, &mut rng)?;
 
@@ -196,6 +213,13 @@ pub fn prove(
             });
         }
 
+        // Compute the seed-tree co-path for the hidden party. The verifier
+        // will use this to reconstruct all N-1 opened parties' seeds.
+        let co_path = {
+            let tree = SeedTree::build(all_root_seeds[rep], num_parties);
+            tree.co_path(hidden)
+        };
+
         // Reveal only the hidden party's output wire shares.
         let output_start = circuit.num_wires - circuit.num_outputs;
         let hidden_output_shares: Vec<u32> = (output_start..circuit.num_wires)
@@ -205,6 +229,7 @@ pub fn prove(
         repetition_proofs.push(RepetitionProof {
             hidden_party: hidden,
             commitment_root: commit_trees[rep].root(),
+            co_path,
             opened_views,
             hidden_output_shares,
         });
@@ -290,16 +315,30 @@ pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Res
             )));
         }
 
+        // Reconstruct all N leaf seeds from the GGM seed-tree co-path.
+        // The slot at hidden_party is left as all-zeros and must not be used.
+        let reconstructed_seeds = reconstruct_leaves_from_co_path(
+            &rep_proof.co_path,
+            rep_proof.hidden_party,
+            num_parties,
+        );
+
         // Verify commitments and view consistency for all opened views.
         for opened in &rep_proof.opened_views {
             let p = opened.view.party_idx;
 
-            // Recompute the BLAKE3 commitment from the opened view.
+            // The reconstructed seed for this party must match what the
+            // prover committed to (via the Merkle auth path check below).
+            // This is the tamper-resistance guarantee of the seed tree.
+            let reconstructed_seed = &reconstructed_seeds[p];
+
+            // Recompute the BLAKE3 commitment from the opened view using
+            // the reconstructed seed (since seed is serde-skipped in proof).
             let recomputed = commit_view(
                 rep,
                 p,
-                &opened.view.seed,
-                &opened.view.to_commitment_bytes(),
+                reconstructed_seed,
+                &opened.view.to_commitment_bytes_with_seed(reconstructed_seed),
                 &opened.commitment_randomness,
             );
 

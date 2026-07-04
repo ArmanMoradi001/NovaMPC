@@ -23,6 +23,7 @@ pub mod mpc;
 pub mod params;
 pub mod predicate;
 pub mod proof;
+pub mod seed_tree;
 pub mod sharing;
 
 pub use error::MpcithError;
