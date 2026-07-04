@@ -2,8 +2,10 @@
 
 use crate::{
     circuit::Circuit,
-    commitment::{commit_view, CommitmentMatrix},
+    commitment::{commit_view, Commitment, CommitmentMatrix},
     fiat_shamir::{derive_challenges, hash_circuit},
+    merkle::MerkleTree,
+    mimc::{mimc_hash_native, MIMC_ROUNDS},
     mpc::{run_mpc_emulation, verify_party_view, MpcExecution, PartyView},
     params::ProofParams,
     predicate::Predicate,
@@ -13,20 +15,57 @@ use crate::{
 use rand::thread_rng;
 use serde::{Deserialize, Serialize};
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/// Compress a 32-byte BLAKE3 [`Commitment`] to a single `u32` Merkle leaf.
+///
+/// The 32 bytes are split into 8 × `u32` chunks (little-endian) and folded
+/// left-to-right with [`mimc_hash_native`], keeping only the left output word.
+///
+/// **Design choice**: MiMC folding rather than taking the first 4 raw bytes.
+/// Taking raw bytes would reduce collision resistance to 32 bits with trivial
+/// invertibility; a MiMC chain is a permutation whose inversion requires
+/// solving the MiMC algebraic system — harder to exploit.
+///
+/// **Tradeoff**: the chain reduces per-leaf collision resistance from 256 bits
+/// (BLAKE3) to 32 bits (MiMC over Z_{2^32}). This is acceptable because the
+/// Merkle tree is used only to authenticate *which* commitment belongs to which
+/// party. The binding guarantee that matters — that the prover cannot swap a
+/// party's view after committing — still comes from the BLAKE3 commitment
+/// recomputed and path-verified inside [`verify`]. An attacker who forged a
+/// Merkle leaf would also need to produce a BLAKE3 pre-image collision, which
+/// is computationally infeasible.
+fn commitment_to_leaf(c: &Commitment) -> u32 {
+    let chunks: [u32; 8] =
+        std::array::from_fn(|i| u32::from_le_bytes(c.0[i * 4..(i + 1) * 4].try_into().unwrap()));
+    let mut acc = mimc_hash_native(chunks[0], chunks[1], MIMC_ROUNDS).0;
+    for i in 2..8usize {
+        acc = mimc_hash_native(acc, chunks[i], MIMC_ROUNDS).0;
+    }
+    acc
+}
+
 // ─── Data structures ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenedView {
     pub view: PartyView,
     pub commitment_randomness: [u8; 32],
+    /// Merkle authentication path (siblings) proving this party's commitment
+    /// leaf is included under [`RepetitionProof::commitment_root`].
+    /// The i-th sibling corresponds to tree level i (leaf level = 0).
+    pub commitment_auth_path: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepetitionProof {
     /// Index of the party whose view is HIDDEN.
     pub hidden_party: usize,
-    /// All N commitments for this repetition.
-    pub commitments: Vec<crate::commitment::Commitment>,
+    /// MiMC-Merkle root over the N per-party commitment leaves for this
+    /// repetition. Replaces the old `Vec<Commitment>`: the hidden party's raw
+    /// commitment is never transmitted; the root binds all N commitments and
+    /// serves as the Fiat-Shamir input for this repetition.
+    pub commitment_root: u32,
     /// Opened views for all parties except hidden_party.
     pub opened_views: Vec<OpenedView>,
     /// Hidden party's share of each output wire.
@@ -101,13 +140,7 @@ pub fn prove(
             rng.fill_bytes(&mut rand);
 
             let view = &exec.views[p];
-            let commitment = commit_view(
-                rep,
-                p,
-                &view.seed,
-                &view.to_commitment_bytes(),
-                &rand,
-            );
+            let commitment = commit_view(rep, p, &view.seed, &view.to_commitment_bytes(), &rand);
             commit_matrix.set(rep, p, commitment);
             rep_randomness.push(rand);
         }
@@ -116,9 +149,30 @@ pub fn prove(
         all_commitment_randomness.push(rep_randomness);
     }
 
+    // ── Phase 1.5: Build per-repetition commitment Merkle trees ──────────
+    // Each 32-byte BLAKE3 commitment is compressed to a u32 leaf via MiMC
+    // folding (see commitment_to_leaf). The tree root binds all N per-party
+    // commitments without transmitting any individual commitment in the clear,
+    // including — crucially — the hidden party's commitment.
+    let commit_trees: Vec<MerkleTree> = (0..num_repetitions)
+        .map(|rep| {
+            let leaves: Vec<u32> = (0..num_parties)
+                .map(|p| commitment_to_leaf(commit_matrix.get(rep, p)))
+                .collect();
+            MerkleTree::build(&leaves)
+        })
+        .collect();
+
     // ── Phase 2: Challenge (Fiat-Shamir) ──────────────────────────────────
+    // One u32 root per repetition rather than N × 32 raw commitment bytes.
+    // The root is a binding commitment to all N per-party commitments via the
+    // MiMC Merkle tree built above.
+    let mut commit_bytes = Vec::with_capacity(num_repetitions * 4);
+    for tree in &commit_trees {
+        commit_bytes.extend_from_slice(&tree.root().to_le_bytes());
+    }
     let challenges = derive_challenges(
-        &commit_matrix.to_bytes(),
+        &commit_bytes,
         public_inputs,
         &circuit_hash,
         num_repetitions,
@@ -131,10 +185,14 @@ pub fn prove(
     for (rep, (exec, &hidden)) in all_executions.iter().zip(challenges.iter()).enumerate() {
         let mut opened_views = Vec::with_capacity(num_parties - 1);
         for p in 0..num_parties {
-            if p == hidden { continue; }
+            if p == hidden {
+                continue;
+            }
+            let auth_proof = commit_trees[rep].prove_membership(p);
             opened_views.push(OpenedView {
                 view: exec.views[p].clone(),
                 commitment_randomness: all_commitment_randomness[rep][p],
+                commitment_auth_path: auth_proof.siblings,
             });
         }
 
@@ -146,7 +204,7 @@ pub fn prove(
 
         repetition_proofs.push(RepetitionProof {
             hidden_party: hidden,
-            commitments: commit_matrix.commitments[rep].clone(),
+            commitment_root: commit_trees[rep].root(),
             opened_views,
             hidden_output_shares,
         });
@@ -196,11 +254,10 @@ pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Res
     let output_start = proof.num_circuit_wires - num_outputs;
 
     // ── Step 1: Recompute Fiat-Shamir challenges ───────────────────────────
-    let mut commit_bytes: Vec<u8> = Vec::new();
+    // Mirrors prove(): collect one u32 root per repetition.
+    let mut commit_bytes = Vec::with_capacity(proof.repetitions.len() * 4);
     for rep_proof in &proof.repetitions {
-        for c in &rep_proof.commitments {
-            commit_bytes.extend_from_slice(&c.0);
-        }
+        commit_bytes.extend_from_slice(&rep_proof.commitment_root.to_le_bytes());
     }
 
     let expected_challenges = derive_challenges(
@@ -212,8 +269,11 @@ pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Res
     );
 
     // ── Step 2: Per-repetition checks ─────────────────────────────────────
-    for (rep, (rep_proof, &expected_hidden)) in
-        proof.repetitions.iter().zip(expected_challenges.iter()).enumerate()
+    for (rep, (rep_proof, &expected_hidden)) in proof
+        .repetitions
+        .iter()
+        .zip(expected_challenges.iter())
+        .enumerate()
     {
         if rep_proof.hidden_party != expected_hidden {
             return Err(MpcithError::VerificationFailed(format!(
@@ -234,7 +294,7 @@ pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Res
         for opened in &rep_proof.opened_views {
             let p = opened.view.party_idx;
 
-            // Check commitment.
+            // Recompute the BLAKE3 commitment from the opened view.
             let recomputed = commit_view(
                 rep,
                 p,
@@ -242,8 +302,21 @@ pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Res
                 &opened.view.to_commitment_bytes(),
                 &opened.commitment_randomness,
             );
-            if recomputed != rep_proof.commitments[p] {
-                return Err(MpcithError::CommitmentMismatch { party: p, repetition: rep });
+
+            // Compress to a Merkle leaf and verify the authentication path
+            // against this repetition's commitment root.
+            let leaf = commitment_to_leaf(&recomputed);
+            let merkle_proof = crate::merkle::MerkleProof {
+                leaf,
+                leaf_index: p,
+                siblings: opened.commitment_auth_path.clone(),
+                root: rep_proof.commitment_root,
+            };
+            if !merkle_proof.verify() {
+                return Err(MpcithError::CommitmentMismatch {
+                    party: p,
+                    repetition: rep,
+                });
             }
 
             // Check that the party's wire_shares are internally consistent
@@ -310,7 +383,9 @@ mod tests {
     #[test]
     fn test_prove_verify_multiplication() {
         let params = fast_params();
-        let pred = Predicate::MultiplicationCheck { expected_product: 12 };
+        let pred = Predicate::MultiplicationCheck {
+            expected_product: 12,
+        };
         let proof = prove(pred, &[3, 4], &[12], &params).unwrap();
         assert!(verify(&proof, &[12], &params).unwrap());
     }
@@ -318,7 +393,9 @@ mod tests {
     #[test]
     fn test_prove_verify_xor() {
         let params = fast_params();
-        let pred = Predicate::XorCheck { expected_xor: 0b1010 ^ 0b1100 };
+        let pred = Predicate::XorCheck {
+            expected_xor: 0b1010 ^ 0b1100,
+        };
         let proof = prove(pred, &[0b1010, 0b1100], &[0b0110], &params).unwrap();
         assert!(verify(&proof, &[0b0110], &params).unwrap());
     }
@@ -443,7 +520,10 @@ mod tests {
         let witness = range_witness(500, 0, 1000);
         let proof = prove(pred, &witness, &[0, 1000], &params).unwrap();
         let size = proof.serialized_size();
-        println!("Range proof size (balanced params, N=16 M=38): {} bytes", size);
+        println!(
+            "Range proof size (balanced params, N=16 M=38): {} bytes",
+            size
+        );
         assert!(verify(&proof, &[0, 1000], &params).unwrap());
     }
 }

@@ -63,8 +63,8 @@ fn test_range_and_membership_composition() {
     let x = 42u32;
     let range_pred = Predicate::RangeCheck { lo, hi };
     let r_witness = range_witness(x, lo, hi);
-    let range_proof = prove(range_pred, &r_witness, &[lo, hi], &params)
-        .expect("range prove should succeed");
+    let range_proof =
+        prove(range_pred, &r_witness, &[lo, hi], &params).expect("range prove should succeed");
     assert!(
         verify(&range_proof, &[lo, hi], &params).unwrap(),
         "range verify should pass"
@@ -78,8 +78,8 @@ fn test_range_and_membership_composition() {
     let merkle_proof = tree.prove_membership(leaf_idx);
     let m_witness = membership_witness(&merkle_proof);
     let mem_pred = Predicate::SetMembership { members };
-    let mem_proof = prove(mem_pred, &m_witness, &[root], &params)
-        .expect("membership prove should succeed");
+    let mem_proof =
+        prove(mem_pred, &m_witness, &[root], &params).expect("membership prove should succeed");
     assert!(
         verify(&mem_proof, &[root], &params).unwrap(),
         "membership verify should pass"
@@ -148,18 +148,9 @@ fn test_proof_sizes_table() {
     println!("{}", "-".repeat(80));
 
     for case in cases {
-        for (label, params) in &[
-            ("N=3 M=10", fast.clone()),
-            ("N=16 M=38", balanced.clone()),
-        ] {
+        for (label, params) in &[("N=3 M=10", fast.clone()), ("N=16 M=38", balanced.clone())] {
             let t0 = Instant::now();
-            let proof = prove(
-                case.pred.clone(),
-                &case.witness,
-                &case.public,
-                params,
-            )
-            .unwrap();
+            let proof = prove(case.pred.clone(), &case.witness, &case.public, params).unwrap();
             let prove_ms = t0.elapsed().as_millis();
 
             let t1 = Instant::now();
@@ -190,10 +181,7 @@ fn test_membership_non_member_rejected() {
     let pred = Predicate::SetMembership { members };
 
     let result = prove(pred, &witness, &[root], &params);
-    assert!(
-        result.is_err(),
-        "prove() should reject a non-member leaf"
-    );
+    assert!(result.is_err(), "prove() should reject a non-member leaf");
 }
 
 #[test]
@@ -212,10 +200,7 @@ fn test_range_proof_large_range() {
 #[test]
 fn test_soundness_parameter_sweep() {
     println!();
-    println!(
-        "{:<6} {:<6} {:>12}",
-        "N", "M", "sound_bits"
-    );
+    println!("{:<6} {:<6} {:>12}", "N", "M", "sound_bits");
     println!("{}", "-".repeat(28));
 
     let party_counts = [3, 5, 16];
@@ -241,11 +226,43 @@ fn make_addition_proof() -> Proof {
 
 #[test]
 fn test_tampered_commitment_rejected() {
+    // Previously tampered with `commitments[0]` directly; that field is gone.
+    // The equivalent under the Merkle-commitment scheme is to corrupt the
+    // `commitment_randomness` of an opened view: the verifier recomputes the
+    // BLAKE3 commitment from (view + randomness), converts it to a Merkle leaf,
+    // and verifies the auth path against `commitment_root`.  Wrong randomness
+    // produces a different leaf, causing MerkleProof::verify() to return false.
     let mut proof = make_addition_proof();
-    // Flip one bit in the first commitment of the first repetition.
-    proof.repetitions[0].commitments[0].0[0] ^= 0x01;
+    proof.repetitions[0].opened_views[0].commitment_randomness[0] ^= 0x01;
     let result = verify(&proof, &[7], &ProofParams::fast_insecure());
-    assert!(result.is_err(), "tampered commitment must cause Err, not Ok(false)");
+    assert!(
+        result.is_err(),
+        "tampered commitment randomness must cause Err"
+    );
+}
+
+#[test]
+fn test_tampered_commitment_root_rejected() {
+    // Flip a bit in the Merkle root stored in the proof. The verifier uses
+    // commitment_root for Fiat-Shamir re-derivation (so challenges change,
+    // causing hidden_party mismatches) AND as the expected root in every
+    // auth-path check for that repetition (so any path that was valid under
+    // the original root now fails). Either path leads to Err.
+    let mut proof = make_addition_proof();
+    proof.repetitions[0].commitment_root ^= 0x01;
+    let result = verify(&proof, &[7], &ProofParams::fast_insecure());
+    assert!(result.is_err(), "tampered commitment_root must cause Err");
+}
+
+#[test]
+fn test_tampered_auth_path_rejected() {
+    // Flip a bit in the first sibling of the first opened view's auth path.
+    // MerkleProof::verify() recomputes the root from leaf + siblings; a wrong
+    // sibling produces a root that does not match commitment_root -> Err.
+    let mut proof = make_addition_proof();
+    proof.repetitions[0].opened_views[0].commitment_auth_path[0] ^= 0x01;
+    let result = verify(&proof, &[7], &ProofParams::fast_insecure());
+    assert!(result.is_err(), "tampered auth path must cause Err");
 }
 
 #[test]
@@ -256,7 +273,10 @@ fn test_tampered_opened_view_rejected() {
     let output_wire = proof.num_circuit_wires - proof.num_circuit_outputs;
     proof.repetitions[0].opened_views[0].view.wire_shares[output_wire] ^= 0xFF;
     let result = verify(&proof, &[7], &ProofParams::fast_insecure());
-    assert!(result.is_err(), "tampered output wire share must cause Err, not Ok(false)");
+    assert!(
+        result.is_err(),
+        "tampered output wire share must cause Err, not Ok(false)"
+    );
 }
 
 #[test]
@@ -267,7 +287,10 @@ fn test_tampered_hidden_party_rejected() {
     let alternative = if original == 0 { 1 } else { 0 };
     proof.repetitions[0].hidden_party = alternative;
     let result = verify(&proof, &[7], &ProofParams::fast_insecure());
-    assert!(result.is_err(), "tampered hidden_party must cause Err, not Ok(false)");
+    assert!(
+        result.is_err(),
+        "tampered hidden_party must cause Err, not Ok(false)"
+    );
 }
 
 #[test]
@@ -278,7 +301,10 @@ fn test_tampered_intermediate_wire_rejected() {
     // Wire 0 is an input wire — not an output, so this was previously undetected.
     proof.repetitions[0].opened_views[0].view.wire_shares[0] ^= 0xFF;
     let result = verify(&proof, &[7], &ProofParams::fast_insecure());
-    assert!(result.is_err(), "tampered intermediate wire must now cause Err via verify_party_view");
+    assert!(
+        result.is_err(),
+        "tampered intermediate wire must now cause Err via verify_party_view"
+    );
 }
 
 #[test]
@@ -336,13 +362,23 @@ fn test_proof_size_blowup_diagnostic() {
         println!("--- RangeCheck(0, MAX/2) ---");
         println!("  gates: {total_gates}  (mul: {mul_gates})  wires: {num_wires}");
         println!("  single PartyView:");
-        println!("    broadcast_messages: {} msgs, {} bytes", sample_view.broadcast_messages.len(), broadcast_ser.len());
-        println!("    wire_shares:       {} words, {} bytes", sample_view.wire_shares.len(), shares_ser.len());
+        println!(
+            "    broadcast_messages: {} msgs, {} bytes",
+            sample_view.broadcast_messages.len(),
+            broadcast_ser.len()
+        );
+        println!(
+            "    wire_shares:       {} words, {} bytes",
+            sample_view.wire_shares.len(),
+            shares_ser.len()
+        );
 
         let avg = proof_bytes as f64 / (m as f64 * n as f64);
         let theoretical_min = sample_view.wire_shares.len() * 4;
         println!("  proof_bytes: {proof_bytes}");
-        println!("  avg bytes/party/rep: {avg:.0}  (theoretical min if shares-only: {theoretical_min})");
+        println!(
+            "  avg bytes/party/rep: {avg:.0}  (theoretical min if shares-only: {theoretical_min})"
+        );
         println!("  blowup factor: {:.1}x", avg / theoretical_min as f64);
 
         let msgs_per_party = sample_view.broadcast_messages.len();
@@ -377,13 +413,23 @@ fn test_proof_size_blowup_diagnostic() {
         println!("--- SetMembership(8) ---");
         println!("  gates: {total_gates}  (mul: {mul_gates})  wires: {num_wires}");
         println!("  single PartyView:");
-        println!("    broadcast_messages: {} msgs, {} bytes", sample_view.broadcast_messages.len(), broadcast_ser.len());
-        println!("    wire_shares:       {} words, {} bytes", sample_view.wire_shares.len(), shares_ser.len());
+        println!(
+            "    broadcast_messages: {} msgs, {} bytes",
+            sample_view.broadcast_messages.len(),
+            broadcast_ser.len()
+        );
+        println!(
+            "    wire_shares:       {} words, {} bytes",
+            sample_view.wire_shares.len(),
+            shares_ser.len()
+        );
 
         let avg = proof_bytes as f64 / (m as f64 * n as f64);
         let theoretical_min = sample_view.wire_shares.len() * 4;
         println!("  proof_bytes: {proof_bytes}");
-        println!("  avg bytes/party/rep: {avg:.0}  (theoretical min if shares-only: {theoretical_min})");
+        println!(
+            "  avg bytes/party/rep: {avg:.0}  (theoretical min if shares-only: {theoretical_min})"
+        );
         println!("  blowup factor: {:.1}x", avg / theoretical_min as f64);
 
         let msgs_per_party = sample_view.broadcast_messages.len();
