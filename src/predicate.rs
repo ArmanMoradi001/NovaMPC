@@ -8,7 +8,7 @@
 //! - `RangeCheck`: prove lo <= x <= hi  (Phase 2)
 //! - `SetMembership`: prove x ∈ {v1, ..., vk}  (Phase 2)
 
-use crate::circuit::{bit_decompose_on, Circuit, CircuitBuilder};
+use crate::circuit::{bit_decompose_on, Circuit, CircuitBuilder, Gate};
 use crate::merkle::MerkleTree;
 use crate::mimc::{build_mimc_hash, MIMC_ROUNDS};
 
@@ -80,6 +80,133 @@ impl Predicate {
                 2 + depth
             }
         }
+    }
+}
+
+/// Compound predicate: combines multiple predicates with logical connectives.
+///
+/// The `And` variant merges two compiled predicates into a single circuit
+/// so that both sub-predicates are proven over the same witness shares,
+/// party views, and Fiat-Shamir transcript.
+#[derive(Debug, Clone)]
+pub enum CompoundPredicate {
+    Single(Predicate),
+    And(Box<CompoundPredicate>, Box<CompoundPredicate>),
+}
+
+/// Remap wire indices in a gate for circuit merging.
+///
+/// The merged circuit uses layout: [left_inputs, right_inputs, left_intermediates, right_intermediates].
+/// Input wires (0..num_inputs) get `input_offset`; intermediate wires get `intermediate_offset`.
+fn remap_gate(gate: &Gate, num_inputs: usize, input_offset: usize, intermediate_offset: usize) -> Gate {
+    fn remap(idx: usize, num_inputs: usize, input_off: usize, inter_off: usize) -> usize {
+        if idx < num_inputs {
+            idx + input_off
+        } else {
+            idx + inter_off
+        }
+    }
+    match gate {
+        Gate::Add { left, right, output } => Gate::Add {
+            left: remap(*left, num_inputs, input_offset, intermediate_offset),
+            right: remap(*right, num_inputs, input_offset, intermediate_offset),
+            output: remap(*output, num_inputs, input_offset, intermediate_offset),
+        },
+        Gate::Mul { left, right, output } => Gate::Mul {
+            left: remap(*left, num_inputs, input_offset, intermediate_offset),
+            right: remap(*right, num_inputs, input_offset, intermediate_offset),
+            output: remap(*output, num_inputs, input_offset, intermediate_offset),
+        },
+        Gate::Xor { left, right, output } => Gate::Xor {
+            left: remap(*left, num_inputs, input_offset, intermediate_offset),
+            right: remap(*right, num_inputs, input_offset, intermediate_offset),
+            output: remap(*output, num_inputs, input_offset, intermediate_offset),
+        },
+        Gate::AddConst { input, constant, output } => Gate::AddConst {
+            input: remap(*input, num_inputs, input_offset, intermediate_offset),
+            constant: *constant,
+            output: remap(*output, num_inputs, input_offset, intermediate_offset),
+        },
+        Gate::MulConst { input, constant, output } => Gate::MulConst {
+            input: remap(*input, num_inputs, input_offset, intermediate_offset),
+            constant: *constant,
+            output: remap(*output, num_inputs, input_offset, intermediate_offset),
+        },
+        Gate::AssertEq { input, expected, output } => Gate::AssertEq {
+            input: remap(*input, num_inputs, input_offset, intermediate_offset),
+            expected: *expected,
+            output: remap(*output, num_inputs, input_offset, intermediate_offset),
+        },
+    }
+}
+
+impl CompoundPredicate {
+    /// Compile this compound predicate into a single merged circuit.
+    pub fn compile(&self) -> crate::Result<CompiledPredicate> {
+        match self {
+            CompoundPredicate::Single(pred) => pred.compile(),
+            CompoundPredicate::And(left, right) => {
+                let compiled_left = left.compile()?;
+                let compiled_right = right.compile()?;
+
+                let c_left = &compiled_left.circuit;
+                let c_right = &compiled_right.circuit;
+
+                // Merged wire layout: [left_inputs, right_inputs, left_intermediates, right_intermediates]
+                let num_inputs = c_left.num_inputs + c_right.num_inputs;
+                let num_wires = c_left.num_wires + c_right.num_wires;
+                let num_outputs = c_left.num_outputs + c_right.num_outputs;
+
+                let mut gates = Vec::with_capacity(c_left.gates.len() + c_right.gates.len());
+
+                // Left circuit: inputs at 0..L-1, intermediates at L+R..L+R+LI-1
+                for gate in &c_left.gates {
+                    gates.push(remap_gate(
+                        gate,
+                        c_left.num_inputs,
+                        0,                     // input_offset: left inputs stay at 0
+                        c_right.num_inputs,    // intermediate_offset: shift right by R
+                    ));
+                }
+
+                // Right circuit: inputs at L..L+R-1, intermediates at c_left.num_wires..
+                for gate in &c_right.gates {
+                    gates.push(remap_gate(
+                        gate,
+                        c_right.num_inputs,
+                        c_left.num_inputs,     // input_offset: right inputs start after left inputs
+                        c_left.num_wires,      // intermediate_offset: right intermediates after left's full space
+                    ));
+                }
+
+                let circuit = Circuit {
+                    num_wires,
+                    num_inputs,
+                    num_outputs,
+                    gates,
+                };
+
+                let mut public_inputs = compiled_left.public_inputs;
+                public_inputs.extend_from_slice(&compiled_right.public_inputs);
+
+                Ok(CompiledPredicate {
+                    circuit,
+                    public_inputs,
+                    witness_size: compiled_left.witness_size + compiled_right.witness_size,
+                })
+            }
+        }
+    }
+
+    /// Convenience: RangeCheck AND SetMembership over the same witness.
+    ///
+    /// The left sub-circuit proves `lo <= value <= hi` (witness: value).
+    /// The right sub-circuit proves `value ∈ members` (witness: value, index, bits, siblings).
+    pub fn range_and_membership(lo: u32, hi: u32, members: Vec<u32>) -> Self {
+        CompoundPredicate::And(
+            Box::new(CompoundPredicate::Single(Predicate::RangeCheck { lo, hi })),
+            Box::new(CompoundPredicate::Single(Predicate::SetMembership { members })),
+        )
     }
 }
 
@@ -401,5 +528,86 @@ mod tests {
         let compiled = pred.compile().unwrap();
         let witness = range_witness(101, 10, 100);
         assert!(compiled.circuit.evaluate(&witness).is_err());
+    }
+
+    #[test]
+    fn test_compound_and_compiles() {
+        let compound = CompoundPredicate::range_and_membership(0, 100, vec![10, 20, 30, 42]);
+        let compiled = compound.compile().unwrap();
+        assert!(compiled.circuit.num_wires > 0);
+        assert!(compiled.circuit.num_inputs > 0);
+        assert!(compiled.circuit.gates.len() > 0);
+    }
+
+    #[test]
+    fn test_compound_and_valid_witness() {
+        let members = vec![10u32, 20, 30, 42];
+        let compound = CompoundPredicate::range_and_membership(0, 100, members.clone());
+        let compiled = compound.compile().unwrap();
+
+        let tree = MerkleTree::build(&members);
+        let proof = tree.prove_membership(3);
+        let sm_witness = set_membership_witness(&proof);
+        let range_w = range_witness(42, 0, 100);
+
+        let mut full_witness = range_w;
+        full_witness.extend_from_slice(&sm_witness);
+
+        compiled.circuit.evaluate(&full_witness).unwrap();
+    }
+
+    #[test]
+    fn test_compound_and_fails_if_range_invalid() {
+        let members = vec![10u32, 20, 30, 42];
+        let compound = CompoundPredicate::range_and_membership(0, 100, members.clone());
+        let compiled = compound.compile().unwrap();
+
+        let tree = MerkleTree::build(&members);
+        let proof = tree.prove_membership(3);
+        let sm_witness = set_membership_witness(&proof);
+        let range_w = range_witness(200, 0, 100);
+
+        let mut full_witness = range_w;
+        full_witness.extend_from_slice(&sm_witness);
+
+        assert!(compiled.circuit.evaluate(&full_witness).is_err());
+    }
+
+    #[test]
+    fn test_compound_and_fails_if_membership_invalid() {
+        let members = vec![10u32, 20, 30, 42];
+        let compound = CompoundPredicate::range_and_membership(0, 100, members.clone());
+        let compiled = compound.compile().unwrap();
+
+        let tree = MerkleTree::build(&members);
+        let range_w = range_witness(50, 0, 100);
+
+        // Build a membership witness with leaf=50 (NOT in the set).
+        // Use the Merkle path structure from index 3, but with the wrong leaf.
+        let mut bad_proof = tree.prove_membership(3);
+        bad_proof.leaf = 50;
+        let sm_witness = set_membership_witness(&bad_proof);
+
+        let mut full_witness = range_w;
+        full_witness.extend_from_slice(&sm_witness);
+
+        assert!(compiled.circuit.evaluate(&full_witness).is_err());
+    }
+
+    #[test]
+    fn test_compound_and_fails_if_both_invalid() {
+        let members = vec![10u32, 20, 30, 42];
+        let compound = CompoundPredicate::range_and_membership(0, 100, members.clone());
+        let compiled = compound.compile().unwrap();
+
+        let tree = MerkleTree::build(&members);
+        let proof = tree.prove_membership(3);
+        let sm_witness = set_membership_witness(&proof);
+        let range_w = range_witness(200, 0, 100);
+
+        let mut full_witness = range_w;
+        full_witness.extend_from_slice(&sm_witness);
+
+        assert!(compiled.circuit.evaluate(&full_witness).is_err());
     }
 }
