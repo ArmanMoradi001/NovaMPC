@@ -25,6 +25,7 @@ pub mod predicate;
 pub mod proof;
 pub mod seed_tree;
 pub mod sharing;
+pub mod tx_validation;
 
 pub use error::MpcithError;
 pub use params::ProofParams;
