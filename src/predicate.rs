@@ -68,6 +68,32 @@ impl Predicate {
         }
     }
 
+    /// Generate the full private witness vector for a given secret value.
+    ///
+    /// For `RangeCheck`: returns `[x, x_bits(32), shifted_bits(k), slack_bits(k)]`.
+    /// For `SetMembership`: returns `[leaf, leaf_index, bits, siblings]`.
+    /// Other variants return an error (use `prove()` with an explicit witness).
+    pub fn generate_witness(&self, secret_value: u32) -> crate::Result<Vec<u32>> {
+        match self {
+            Predicate::RangeCheck { lo, hi } => {
+                Ok(range_witness_vec(secret_value, *lo, *hi))
+            }
+            Predicate::SetMembership { members } => {
+                let idx = members.iter().position(|&m| m == secret_value).ok_or_else(|| {
+                    crate::MpcithError::InvalidWitness(format!(
+                        "Value {secret_value} is not in the member set"
+                    ))
+                })?;
+                let tree = MerkleTree::build(members);
+                let proof = tree.prove_membership(idx);
+                Ok(set_membership_witness_vec(&proof))
+            }
+            _ => Err(crate::MpcithError::InvalidParams(format!(
+                "generate_witness is not supported for this predicate variant"
+            ))),
+        }
+    }
+
     /// Number of private witness elements this predicate requires.
     pub fn witness_size(&self) -> usize {
         match self {
@@ -398,6 +424,57 @@ fn compile_set_membership(members: &[u32]) -> crate::Result<CompiledPredicate> {
         public_inputs: vec![root],
         witness_size: 2 + depth,
     })
+}
+
+/// Helper: build the full RangeCheck witness for value x in [lo, hi].
+fn range_witness_vec(x: u32, lo: u32, hi: u32) -> Vec<u32> {
+    let width = hi.wrapping_sub(lo);
+    let k = bits_needed(width);
+    let shifted = x.wrapping_sub(lo);
+    let slack = width.wrapping_sub(shifted);
+
+    let mut w = Vec::with_capacity(1 + 32 + k + k);
+    w.push(x);
+    for i in 0..32 {
+        w.push((x >> i) & 1);
+    }
+    for i in 0..k {
+        w.push((shifted >> i) & 1);
+    }
+    for i in 0..k {
+        w.push((slack >> i) & 1);
+    }
+    w
+}
+
+/// Helper: build the full SetMembership witness from a MerkleProof.
+fn set_membership_witness_vec(proof: &crate::merkle::MerkleProof) -> Vec<u32> {
+    let depth = proof.siblings.len();
+    let mut w = Vec::with_capacity(2 + 2 * depth);
+    w.push(proof.leaf);
+    w.push(proof.leaf_index as u32);
+    for i in 0..depth {
+        w.push(((proof.leaf_index >> i) & 1) as u32);
+    }
+    w.extend(&proof.siblings);
+    w
+}
+
+impl CompoundPredicate {
+    /// Generate the full compound witness for a given secret value.
+    ///
+    /// For `And`: concatenates left witness ++ right witness.
+    /// For `Single`: delegates to `Predicate::generate_witness`.
+    pub fn generate_witness(&self, secret_value: u32) -> crate::Result<Vec<u32>> {
+        match self {
+            CompoundPredicate::Single(pred) => pred.generate_witness(secret_value),
+            CompoundPredicate::And(left, right) => {
+                let mut w = left.generate_witness(secret_value)?;
+                w.extend_from_slice(&right.generate_witness(secret_value)?);
+                Ok(w)
+            }
+        }
+    }
 }
 
 #[cfg(test)]

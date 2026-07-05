@@ -29,6 +29,6 @@ pub mod sharing;
 pub use error::MpcithError;
 pub use params::ProofParams;
 pub use predicate::{Predicate, CompoundPredicate};
-pub use proof::{Proof, prove, verify};
+pub use proof::{Proof, prove, prove_compound, verify};
 
 pub type Result<T> = std::result::Result<T, MpcithError>;

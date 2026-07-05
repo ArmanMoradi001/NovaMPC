@@ -8,7 +8,7 @@ use crate::{
     mimc::{mimc_hash_native, MIMC_ROUNDS},
     mpc::{run_mpc_emulation, verify_party_view, MpcExecution, PartyView},
     params::ProofParams,
-    predicate::Predicate,
+    predicate::{CompiledPredicate, CompoundPredicate, Predicate},
     seed_tree::{SeedTree, reconstruct_leaves_from_co_path},
     sharing::PartySeed,
     MpcithError, Result,
@@ -111,8 +111,33 @@ pub fn prove(
     params: &ProofParams,
 ) -> Result<Proof> {
     params.validate()?;
-
     let compiled = predicate.compile()?;
+    prove_compiled(&compiled, witness, public_inputs, params)
+}
+
+/// Prove a compound predicate (e.g. RangeCheck AND SetMembership).
+///
+/// Compiles the compound predicate into a single merged circuit, then runs
+/// the same MPC-in-the-Head protocol as `prove()`. The resulting `Proof`
+/// is verified by the existing `verify()` without modification.
+pub fn prove_compound(
+    predicate: CompoundPredicate,
+    witness: &[u32],
+    public_inputs: &[u32],
+    params: &ProofParams,
+) -> Result<Proof> {
+    params.validate()?;
+    let compiled = predicate.compile()?;
+    prove_compiled(&compiled, witness, public_inputs, params)
+}
+
+/// Core proving logic shared by `prove` and `prove_compound`.
+fn prove_compiled(
+    compiled: &CompiledPredicate,
+    witness: &[u32],
+    public_inputs: &[u32],
+    params: &ProofParams,
+) -> Result<Proof> {
     let circuit = &compiled.circuit;
     let circuit_hash = hash_circuit(circuit);
 
@@ -135,9 +160,6 @@ pub fn prove(
     let mut commit_matrix = CommitmentMatrix::new(num_repetitions, num_parties);
 
     for rep in 0..num_repetitions {
-        // Generate a single root seed per repetition; derive all N party seeds
-        // via the GGM seed tree so the prover can reveal a co-path instead of
-        // N-1 individual 32-byte seeds.
         let root_seed: [u8; 32] = {
             let mut s = [0u8; 32];
             use rand::RngCore;
@@ -167,10 +189,6 @@ pub fn prove(
     }
 
     // ── Phase 1.5: Build per-repetition commitment Merkle trees ──────────
-    // Each 32-byte BLAKE3 commitment is compressed to a u32 leaf via MiMC
-    // folding (see commitment_to_leaf). The tree root binds all N per-party
-    // commitments without transmitting any individual commitment in the clear,
-    // including — crucially — the hidden party's commitment.
     let commit_trees: Vec<MerkleTree> = (0..num_repetitions)
         .map(|rep| {
             let leaves: Vec<u32> = (0..num_parties)
@@ -181,9 +199,6 @@ pub fn prove(
         .collect();
 
     // ── Phase 2: Challenge (Fiat-Shamir) ──────────────────────────────────
-    // One u32 root per repetition rather than N × 32 raw commitment bytes.
-    // The root is a binding commitment to all N per-party commitments via the
-    // MiMC Merkle tree built above.
     let mut commit_bytes = Vec::with_capacity(num_repetitions * 4);
     for tree in &commit_trees {
         commit_bytes.extend_from_slice(&tree.root().to_le_bytes());
@@ -213,14 +228,11 @@ pub fn prove(
             });
         }
 
-        // Compute the seed-tree co-path for the hidden party. The verifier
-        // will use this to reconstruct all N-1 opened parties' seeds.
         let co_path = {
             let tree = SeedTree::build(all_root_seeds[rep], num_parties);
             tree.co_path(hidden)
         };
 
-        // Reveal only the hidden party's output wire shares.
         let output_start = circuit.num_wires - circuit.num_outputs;
         let hidden_output_shares: Vec<u32> = (output_start..circuit.num_wires)
             .map(|w| exec.shared_trace.wires[w].shares[hidden])
@@ -564,5 +576,100 @@ mod tests {
             size
         );
         assert!(verify(&proof, &[0, 1000], &params).unwrap());
+    }
+
+    // ── Compound predicate tests ──────────────────────────────────────────
+
+    use crate::predicate::CompoundPredicate;
+
+    #[test]
+    fn test_compound_prove_verify() {
+        let params = fast_params();
+        let members = vec![10u32, 20, 30, 42];
+        let compound = CompoundPredicate::range_and_membership(0, 100, members.clone());
+
+        let witness = compound.generate_witness(42).unwrap();
+
+        // public_inputs = [lo, hi, root]
+        let tree = crate::merkle::MerkleTree::build(&members);
+        let root = tree.root();
+        let public_inputs = vec![0u32, 100, root];
+
+        let proof = prove_compound(compound, &witness, &public_inputs, &params).unwrap();
+        assert!(verify(&proof, &public_inputs, &params).unwrap());
+    }
+
+    #[test]
+    fn test_compound_prove_verify_secure_params() {
+        let params = ProofParams::balanced();
+        let members = vec![10u32, 20, 30, 42];
+        let compound = CompoundPredicate::range_and_membership(0, 100, members.clone());
+
+        let witness = compound.generate_witness(42).unwrap();
+
+        let tree = crate::merkle::MerkleTree::build(&members);
+        let root = tree.root();
+        let public_inputs = vec![0u32, 100, root];
+
+        let proof = prove_compound(compound, &witness, &public_inputs, &params).unwrap();
+        let size = proof.serialized_size();
+        println!(
+            "Compound proof size (balanced params, N=16 M=38): {} bytes",
+            size
+        );
+        assert!(verify(&proof, &public_inputs, &params).unwrap());
+    }
+
+    #[test]
+    fn test_compound_invalid_range_rejected() {
+        let params = fast_params();
+        let members = vec![10u32, 20, 30, 42];
+        let compound = CompoundPredicate::range_and_membership(0, 100, members.clone());
+
+        // Manually build witness: range for 200 (invalid) + valid membership for 42.
+        let tree = crate::merkle::MerkleTree::build(&members);
+        let merkle_proof = tree.prove_membership(3);
+        let mut witness = range_witness(200, 0, 100);
+        witness.extend_from_slice(&set_membership_witness(&merkle_proof));
+
+        let root = tree.root();
+        let public_inputs = vec![0u32, 100, root];
+
+        assert!(prove_compound(compound, &witness, &public_inputs, &params).is_err());
+    }
+
+    #[test]
+    fn test_compound_invalid_membership_rejected() {
+        let _params = fast_params();
+        let members = vec![10u32, 20, 30, 42];
+        let compound = CompoundPredicate::range_and_membership(0, 100, members.clone());
+
+        // Value 50 is in [0,100] but NOT in the member set.
+        // generate_witness for SetMembership will return an error.
+        assert!(compound.generate_witness(50).is_err());
+    }
+
+    #[test]
+    fn test_compound_proof_not_transferable() {
+        let params = fast_params();
+        let members_a = vec![10u32, 20, 30, 42];
+        let compound_a = CompoundPredicate::range_and_membership(0, 100, members_a.clone());
+
+        let witness = compound_a.generate_witness(42).unwrap();
+        let tree_a = crate::merkle::MerkleTree::build(&members_a);
+        let root_a = tree_a.root();
+        let public_inputs_a = vec![0u32, 100, root_a];
+
+        // Prove with member set A
+        let proof = prove_compound(compound_a, &witness, &public_inputs_a, &params).unwrap();
+
+        // Try to verify with a DIFFERENT member set B (different root)
+        let members_b = vec![5u32, 15, 25, 42];
+        let tree_b = crate::merkle::MerkleTree::build(&members_b);
+        let root_b = tree_b.root();
+        let public_inputs_b = vec![0u32, 100, root_b];
+
+        // Verify should fail: proof is bound to root_a, not root_b
+        assert!(verify(&proof, &public_inputs_b, &params).is_err());
     }
 }
