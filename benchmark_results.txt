@@ -1,0 +1,302 @@
+   Compiling mpcith-zk v0.1.0 (/home/arman/projects/thesis/NovaMPC)
+warning: unused variable: `pred_add`
+   --> benches/mpcith_bench.rs:261:13
+    |
+261 |         let pred_add = Predicate::AdditionCheck { expected_sum: 7 };
+    |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_pred_add`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `mpcith-zk` (bench "mpcith_bench") generated 1 warning (run `cargo fix --bench "mpcith_bench" -p mpcith-zk` to apply 1 suggestion)
+    Finished `bench` profile [optimized] target(s) in 19.81s
+     Running unittests src/lib.rs (target/release/deps/mpcith_zk-ef31f68afca1afb0)
+
+running 68 tests
+test circuit::tests::test_addition_circuit ... ignored
+test circuit::tests::test_bit_decompose_42 ... ignored
+test circuit::tests::test_bit_decompose_reconstruction ... ignored
+test circuit::tests::test_bit_decompose_rejects_non_bit ... ignored
+test circuit::tests::test_multiplication_circuit ... ignored
+test commitment::tests::test_commit_binding ... ignored
+test commitment::tests::test_commit_hiding ... ignored
+test commitment::tests::test_commit_verify ... ignored
+test commitment::tests::test_domain_separation ... ignored
+test fiat_shamir::tests::test_challenges_deterministic ... ignored
+test fiat_shamir::tests::test_challenges_differ_on_different_commitments ... ignored
+test merkle::tests::test_eight_leaves ... ignored
+test merkle::tests::test_four_leaves_all_proofs_valid ... ignored
+test merkle::tests::test_four_leaves_deterministic_root ... ignored
+test merkle::tests::test_tampered_leaf_fails ... ignored
+test merkle::tests::test_tampered_sibling_fails ... ignored
+test mimc::tests::test_mimc_constants_deterministic ... ignored
+test mimc::tests::test_mimc_different_inputs_different_outputs ... ignored
+test mimc::tests::test_mimc_native_and_circuit_agree ... ignored
+test mpc::tests::test_mpc_emulation_addition ... ignored
+test mpc::tests::test_view_consistency ... ignored
+test params::tests::test_soundness_bits_balanced ... ignored
+test params::tests::test_soundness_bits_fast_insecure ... ignored
+test predicate::tests::test_addition_predicate_compiles ... ignored
+test predicate::tests::test_compound_and_compiles ... ignored
+test predicate::tests::test_compound_and_fails_if_both_invalid ... ignored
+test predicate::tests::test_compound_and_fails_if_membership_invalid ... ignored
+test predicate::tests::test_compound_and_fails_if_range_invalid ... ignored
+test predicate::tests::test_compound_and_valid_witness ... ignored
+test predicate::tests::test_multiplication_predicate ... ignored
+test predicate::tests::test_range_check_42 ... ignored
+test predicate::tests::test_range_check_above_hi ... ignored
+test predicate::tests::test_range_check_at_hi ... ignored
+test predicate::tests::test_range_check_at_lo ... ignored
+test predicate::tests::test_range_check_below_lo ... ignored
+test predicate::tests::test_range_check_compiles ... ignored
+test predicate::tests::test_set_membership_predicate ... ignored
+test proof::tests::test_compound_invalid_membership_rejected ... ignored
+test proof::tests::test_compound_invalid_range_rejected ... ignored
+test proof::tests::test_compound_proof_not_transferable ... ignored
+test proof::tests::test_compound_prove_verify ... ignored
+test proof::tests::test_compound_prove_verify_secure_params ... ignored
+test proof::tests::test_invalid_witness_rejected ... ignored
+test proof::tests::test_proof_size ... ignored
+test proof::tests::test_prove_verify_addition ... ignored
+test proof::tests::test_prove_verify_multiplication ... ignored
+test proof::tests::test_prove_verify_xor ... ignored
+test proof::tests::test_range_proof_boundary_hi ... ignored
+test proof::tests::test_range_proof_boundary_lo ... ignored
+test proof::tests::test_range_proof_invalid_witness ... ignored
+test proof::tests::test_range_proof_secure_params ... ignored
+test proof::tests::test_range_proof_valid ... ignored
+test proof::tests::test_set_membership_prove_verify ... ignored
+test proof::tests::test_wrong_public_inputs_rejected ... ignored
+test seed_tree::tests::test_build_seed_tree_standalone ... ignored
+test seed_tree::tests::test_co_path_length ... ignored
+test seed_tree::tests::test_determinism ... ignored
+test seed_tree::tests::test_different_roots_differ ... ignored
+test seed_tree::tests::test_n16_all_hidden_indices ... ignored
+test seed_tree::tests::test_n16_hidden7 ... ignored
+test seed_tree::tests::test_n3_non_power_of_two ... ignored
+test seed_tree::tests::test_n5_non_power_of_two ... ignored
+test sharing::tests::test_linear_operations ... ignored
+test sharing::tests::test_share_reconstruct ... ignored
+test tx_validation::tests::test_transaction_proof_amount_out_of_range ... ignored
+test tx_validation::tests::test_transaction_proof_unauthorized_account ... ignored
+test tx_validation::tests::test_transaction_proof_valid ... ignored
+test tx_validation::tests::test_transaction_proof_wrong_context ... ignored
+
+test result: ok. 0 passed; 0 failed; 68 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/demo.rs (target/release/deps/demo-34839d928383e2e1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running benches/mpcith_bench.rs (target/release/deps/mpcith_bench-f9e84fdafba2172d)
+Gnuplot not found, using plotters backend
+Benchmarking prove/addition/fast_n3_m10
+Benchmarking prove/addition/fast_n3_m10: Warming up for 3.0000 s
+Benchmarking prove/addition/fast_n3_m10: Collecting 100 samples in estimated 5.0757 s (20k iterations)
+Benchmarking prove/addition/fast_n3_m10: Analyzing
+prove/addition/fast_n3_m10
+                        time:   [254.47 µs 256.05 µs 257.63 µs]
+                        change: [+1.7571% +2.9399% +4.2243%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 4 outliers among 100 measurements (4.00%)
+  2 (2.00%) high mild
+  2 (2.00%) high severe
+Benchmarking prove/addition/low_n3_m64
+Benchmarking prove/addition/low_n3_m64: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 9.9s, enable flat sampling, or reduce sample count to 40.
+Benchmarking prove/addition/low_n3_m64: Collecting 100 samples in estimated 9.9100 s (5050 iterations)
+Benchmarking prove/addition/low_n3_m64: Analyzing
+prove/addition/low_n3_m64
+                        time:   [1.9140 ms 1.9256 ms 1.9381 ms]
+                        change: [+0.3791% +1.9340% +3.5786%] (p = 0.02 < 0.05)
+                        Change within noise threshold.
+Found 5 outliers among 100 measurements (5.00%)
+  1 (1.00%) high mild
+  4 (4.00%) high severe
+Benchmarking prove/addition/balanced_n16_m38
+Benchmarking prove/addition/balanced_n16_m38: Warming up for 3.0000 s
+Benchmarking prove/addition/balanced_n16_m38: Collecting 100 samples in estimated 5.1999 s (800 iterations)
+Benchmarking prove/addition/balanced_n16_m38: Analyzing
+prove/addition/balanced_n16_m38
+                        time:   [6.4148 ms 6.4796 ms 6.5522 ms]
+                        change: [+1.7867% +3.0501% +4.3764%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 5 outliers among 100 measurements (5.00%)
+  2 (2.00%) high mild
+  3 (3.00%) high severe
+
+Benchmarking verify/addition/fast_n3_m10
+Benchmarking verify/addition/fast_n3_m10: Warming up for 3.0000 s
+Benchmarking verify/addition/fast_n3_m10: Collecting 100 samples in estimated 5.3345 s (25k iterations)
+Benchmarking verify/addition/fast_n3_m10: Analyzing
+verify/addition/fast_n3_m10
+                        time:   [209.78 µs 211.00 µs 212.27 µs]
+                        change: [-2.4316% -0.8918% +0.6161%] (p = 0.26 > 0.05)
+                        No change in performance detected.
+Found 2 outliers among 100 measurements (2.00%)
+  2 (2.00%) high mild
+Benchmarking verify/addition/balanced_n16_m38
+Benchmarking verify/addition/balanced_n16_m38: Warming up for 3.0000 s
+Benchmarking verify/addition/balanced_n16_m38: Collecting 100 samples in estimated 5.1340 s (700 iterations)
+Benchmarking verify/addition/balanced_n16_m38: Analyzing
+verify/addition/balanced_n16_m38
+                        time:   [7.5809 ms 7.6358 ms 7.6965 ms]
+                        change: [-2.3132% +0.0979% +2.3256%] (p = 0.95 > 0.05)
+                        No change in performance detected.
+Found 5 outliers among 100 measurements (5.00%)
+  3 (3.00%) high mild
+  2 (2.00%) high severe
+
+Benchmarking set_membership/prove/4
+Benchmarking set_membership/prove/4: Warming up for 3.0000 s
+Benchmarking set_membership/prove/4: Collecting 100 samples in estimated 8.5718 s (10k iterations)
+Benchmarking set_membership/prove/4: Analyzing
+set_membership/prove/4  time:   [770.86 µs 774.98 µs 779.52 µs]
+                        change: [+1872.5% +1889.9% +1907.5%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 2 outliers among 100 measurements (2.00%)
+  1 (1.00%) high mild
+  1 (1.00%) high severe
+Benchmarking set_membership/prove/8
+Benchmarking set_membership/prove/8: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 5.6s, enable flat sampling, or reduce sample count to 60.
+Benchmarking set_membership/prove/8: Collecting 100 samples in estimated 5.6445 s (5050 iterations)
+Benchmarking set_membership/prove/8: Analyzing
+set_membership/prove/8  time:   [1.0274 ms 1.0351 ms 1.0452 ms]
+                        change: [+1606.5% +1622.1% +1639.2%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 7 outliers among 100 measurements (7.00%)
+  2 (2.00%) high mild
+  5 (5.00%) high severe
+Benchmarking set_membership/prove/16
+Benchmarking set_membership/prove/16: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 6.5s, enable flat sampling, or reduce sample count to 60.
+Benchmarking set_membership/prove/16: Collecting 100 samples in estimated 6.5240 s (5050 iterations)
+Benchmarking set_membership/prove/16: Analyzing
+set_membership/prove/16 time:   [1.2320 ms 1.2379 ms 1.2445 ms]
+                        change: [+1183.4% +1200.6% +1221.7%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 6 outliers among 100 measurements (6.00%)
+  3 (3.00%) high mild
+  3 (3.00%) high severe
+Benchmarking set_membership/prove/32
+Benchmarking set_membership/prove/32: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 8.1s, enable flat sampling, or reduce sample count to 50.
+Benchmarking set_membership/prove/32: Collecting 100 samples in estimated 8.1067 s (5050 iterations)
+Benchmarking set_membership/prove/32: Analyzing
+set_membership/prove/32 time:   [1.4526 ms 1.4625 ms 1.4745 ms]
+                        change: [+806.58% +813.84% +821.16%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 5 outliers among 100 measurements (5.00%)
+  4 (4.00%) high mild
+  1 (1.00%) high severe
+
+Benchmarking transaction_proof/prove
+Benchmarking transaction_proof/prove: Warming up for 3.0000 s
+Benchmarking transaction_proof/prove: Collecting 100 samples in estimated 5.9285 s (400 iterations)
+Benchmarking transaction_proof/prove: Analyzing
+transaction_proof/prove time:   [13.476 ms 13.553 ms 13.634 ms]
+Found 3 outliers among 100 measurements (3.00%)
+  3 (3.00%) high mild
+Benchmarking transaction_proof/verify
+Benchmarking transaction_proof/verify: Warming up for 3.0000 s
+Benchmarking transaction_proof/verify: Collecting 100 samples in estimated 5.9712 s (500 iterations)
+Benchmarking transaction_proof/verify: Analyzing
+transaction_proof/verify
+                        time:   [11.076 ms 11.134 ms 11.196 ms]
+Found 3 outliers among 100 measurements (3.00%)
+  3 (3.00%) high mild
+  transaction_proof proof_size: 3500544 bytes (3418.50 KB)
+
+Benchmarking compound_predicate/prove
+Benchmarking compound_predicate/prove: Warming up for 3.0000 s
+Benchmarking compound_predicate/prove: Collecting 100 samples in estimated 6.1949 s (400 iterations)
+Benchmarking compound_predicate/prove: Analyzing
+compound_predicate/prove
+                        time:   [14.465 ms 14.537 ms 14.610 ms]
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+Benchmarking compound_predicate/verify
+Benchmarking compound_predicate/verify: Warming up for 3.0000 s
+Benchmarking compound_predicate/verify: Collecting 100 samples in estimated 5.2693 s (400 iterations)
+Benchmarking compound_predicate/verify: Analyzing
+compound_predicate/verify
+                        time:   [12.421 ms 12.499 ms 12.585 ms]
+Found 4 outliers among 100 measurements (4.00%)
+  3 (3.00%) high mild
+  1 (1.00%) high severe
+  compound_predicate proof_size: 4736764 bytes (4625.75 KB)
+
+
+predicate                      | params             |   prove_ms |  verify_ms |   proof_kb |  soundness_bits
+----------------------------------------------------------------------------------------------------
+Benchmarking by_param_set/addition_prove/fast_insecure
+Benchmarking by_param_set/addition_prove/fast_insecure: Warming up for 3.0000 s
+Benchmarking by_param_set/addition_prove/fast_insecure: Collecting 100 samples in estimated 5.7546 s (10k iterations)
+Benchmarking by_param_set/addition_prove/fast_insecure: Analyzing
+by_param_set/addition_prove/fast_insecure
+                        time:   [308.50 µs 310.07 µs 311.73 µs]
+Found 4 outliers among 100 measurements (4.00%)
+  3 (3.00%) high mild
+  1 (1.00%) high severe
+AdditionCheck                  | fast_insecure      |      0.31ms |      0.20ms |      2.93KB |            15.8
+Benchmarking by_param_set/compound_prove/fast_insecure
+Benchmarking by_param_set/compound_prove/fast_insecure: Warming up for 3.0000 s
+
+Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 9.6s, enable flat sampling, or reduce sample count to 50.
+Benchmarking by_param_set/compound_prove/fast_insecure: Collecting 100 samples in estimated 9.6078 s (5050 iterations)
+Benchmarking by_param_set/compound_prove/fast_insecure: Analyzing
+by_param_set/compound_prove/fast_insecure
+                        time:   [1.1778 ms 1.1846 ms 1.1919 ms]
+Found 7 outliers among 100 measurements (7.00%)
+  5 (5.00%) high mild
+  2 (2.00%) high severe
+RangeCheck ∧ SetMembership     | fast_insecure      |      1.15ms |      0.44ms |    190.18KB |            15.8
+Benchmarking by_param_set/addition_prove/low_n
+Benchmarking by_param_set/addition_prove/low_n: Warming up for 3.0000 s
+Benchmarking by_param_set/addition_prove/low_n: Collecting 100 samples in estimated 5.1205 s (1400 iterations)
+Benchmarking by_param_set/addition_prove/low_n: Analyzing
+by_param_set/addition_prove/low_n
+                        time:   [1.9704 ms 1.9816 ms 1.9932 ms]
+Found 3 outliers among 100 measurements (3.00%)
+  3 (3.00%) high mild
+AdditionCheck                  | low_n              |      1.95ms |      1.37ms |     17.69KB |           101.4
+Benchmarking by_param_set/compound_prove/low_n
+Benchmarking by_param_set/compound_prove/low_n: Warming up for 3.0000 s
+Benchmarking by_param_set/compound_prove/low_n: Collecting 100 samples in estimated 5.4161 s (500 iterations)
+Benchmarking by_param_set/compound_prove/low_n: Analyzing
+by_param_set/compound_prove/low_n
+                        time:   [7.0012 ms 7.0378 ms 7.0758 ms]
+Found 8 outliers among 100 measurements (8.00%)
+  1 (1.00%) low mild
+  6 (6.00%) high mild
+  1 (1.00%) high severe
+RangeCheck ∧ SetMembership     | low_n              |      6.77ms |      2.44ms |   1064.94KB |           101.4
+Benchmarking by_param_set/addition_prove/balanced
+Benchmarking by_param_set/addition_prove/balanced: Warming up for 3.0000 s
+Benchmarking by_param_set/addition_prove/balanced: Collecting 100 samples in estimated 6.3795 s (400 iterations)
+Benchmarking by_param_set/addition_prove/balanced: Analyzing
+by_param_set/addition_prove/balanced
+                        time:   [6.9823 ms 7.0540 ms 7.1296 ms]
+Found 8 outliers among 100 measurements (8.00%)
+  1 (1.00%) low mild
+  6 (6.00%) high mild
+  1 (1.00%) high severe
+AdditionCheck                  | balanced           |      6.49ms |      7.44ms |     59.86KB |           152.0
+Benchmarking by_param_set/compound_prove/balanced
+Benchmarking by_param_set/compound_prove/balanced: Warming up for 3.0000 s
+Benchmarking by_param_set/compound_prove/balanced: Collecting 100 samples in estimated 6.3612 s (200 iterations)
+Benchmarking by_param_set/compound_prove/balanced: Analyzing
+by_param_set/compound_prove/balanced
+                        time:   [15.124 ms 15.197 ms 15.277 ms]
+Found 3 outliers among 100 measurements (3.00%)
+  1 (1.00%) high mild
+  2 (2.00%) high severe
+RangeCheck ∧ SetMembership     | balanced           |     15.26ms |     11.85ms |   4625.75KB |           152.0
+
+
