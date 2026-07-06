@@ -372,36 +372,20 @@ fn test_proof_size_blowup_diagnostic() {
         let proof_bytes = proof.serialized_size();
 
         let sample_view = &proof.repetitions[0].opened_views[0].view;
-        let broadcast_ser = bincode::serialize(&sample_view.broadcast_messages).unwrap();
-        let shares_ser = bincode::serialize(&sample_view.wire_shares).unwrap();
+        let mul_shares_ser = bincode::serialize(&sample_view.mul_output_shares).unwrap();
 
         println!("--- RangeCheck(0, MAX/2) ---");
         println!("  gates: {total_gates}  (mul: {mul_gates})  wires: {num_wires}");
         println!("  single PartyView:");
         println!(
-            "    broadcast_messages: {} msgs, {} bytes",
-            sample_view.broadcast_messages.len(),
-            broadcast_ser.len()
-        );
-        println!(
-            "    wire_shares:       {} words, {} bytes",
-            sample_view.wire_shares.len(),
-            shares_ser.len()
+            "    mul_output_shares: {} shares, {} bytes",
+            sample_view.mul_output_shares.len(),
+            mul_shares_ser.len()
         );
 
         let avg = proof_bytes as f64 / (m as f64 * n as f64);
-        let theoretical_min = sample_view.wire_shares.len() * 4;
         println!("  proof_bytes: {proof_bytes}");
-        println!(
-            "  avg bytes/party/rep: {avg:.0}  (theoretical min if shares-only: {theoretical_min})"
-        );
-        println!("  blowup factor: {:.1}x", avg / theoretical_min as f64);
-
-        let msgs_per_party = sample_view.broadcast_messages.len();
-        let expected_if_full_copy = mul_gates * n;
-        let redundant = msgs_per_party == expected_if_full_copy;
-        println!("  broadcast msgs/party: {msgs_per_party}  (mul gates: {mul_gates}, if full N-copy: {expected_if_full_copy})");
-        println!("  redundant full N-copy per gate per party? {redundant}");
+        println!("  avg bytes/party/rep: {avg:.0}");
         println!();
     }
 
@@ -423,36 +407,20 @@ fn test_proof_size_blowup_diagnostic() {
         let proof_bytes = proof.serialized_size();
 
         let sample_view = &proof.repetitions[0].opened_views[0].view;
-        let broadcast_ser = bincode::serialize(&sample_view.broadcast_messages).unwrap();
-        let shares_ser = bincode::serialize(&sample_view.wire_shares).unwrap();
+        let mul_shares_ser = bincode::serialize(&sample_view.mul_output_shares).unwrap();
 
         println!("--- SetMembership(8) ---");
         println!("  gates: {total_gates}  (mul: {mul_gates})  wires: {num_wires}");
         println!("  single PartyView:");
         println!(
-            "    broadcast_messages: {} msgs, {} bytes",
-            sample_view.broadcast_messages.len(),
-            broadcast_ser.len()
-        );
-        println!(
-            "    wire_shares:       {} words, {} bytes",
-            sample_view.wire_shares.len(),
-            shares_ser.len()
+            "    mul_output_shares: {} shares, {} bytes",
+            sample_view.mul_output_shares.len(),
+            mul_shares_ser.len()
         );
 
         let avg = proof_bytes as f64 / (m as f64 * n as f64);
-        let theoretical_min = sample_view.wire_shares.len() * 4;
         println!("  proof_bytes: {proof_bytes}");
-        println!(
-            "  avg bytes/party/rep: {avg:.0}  (theoretical min if shares-only: {theoretical_min})"
-        );
-        println!("  blowup factor: {:.1}x", avg / theoretical_min as f64);
-
-        let msgs_per_party = sample_view.broadcast_messages.len();
-        let expected_if_full_copy = mul_gates * n;
-        let redundant = msgs_per_party == expected_if_full_copy;
-        println!("  broadcast msgs/party: {msgs_per_party}  (mul gates: {mul_gates}, if full N-copy: {expected_if_full_copy})");
-        println!("  redundant full N-copy per gate per party? {redundant}");
+        println!("  avg bytes/party/rep: {avg:.0}");
         println!();
     }
 }

@@ -389,7 +389,6 @@ pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Res
                 &proof.circuit,
                 &all_wire_shares[idx],
                 p,
-                &opened.view.broadcast_messages,
             )?;
         }
 
