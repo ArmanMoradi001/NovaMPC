@@ -6,7 +6,7 @@ use crate::{
     fiat_shamir::{derive_challenges, hash_circuit},
     merkle::MerkleTree,
     mimc::{mimc_hash_native, MIMC_ROUNDS},
-    mpc::{run_mpc_emulation, verify_party_view, MpcExecution, PartyView},
+    mpc::{run_mpc_emulation, recompute_linear_shares, verify_party_view, MpcExecution, PartyView},
     params::ProofParams,
     predicate::{CompiledPredicate, CompoundPredicate, Predicate},
     seed_tree::{SeedTree, reconstruct_leaves_from_co_path},
@@ -335,17 +335,34 @@ pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Res
             num_parties,
         );
 
-        // Verify commitments and view consistency for all opened views.
+        // Precompute wire_shares for all opened views.
+        // If the in-memory wire_shares are populated (not deserialized),
+        // use them directly — this preserves tamper-detection semantics.
+        // Otherwise fall back to recompute_linear_shares.
+        let mut all_wire_shares: Vec<Vec<u32>> = Vec::with_capacity(rep_proof.opened_views.len());
         for opened in &rep_proof.opened_views {
             let p = opened.view.party_idx;
+            let ws = if !opened.view.wire_shares.is_empty() {
+                opened.view.wire_shares.clone()
+            } else {
+                let reconstructed_seed = &reconstructed_seeds[p];
+                recompute_linear_shares(
+                    &proof.circuit,
+                    reconstructed_seed,
+                    p,
+                    num_parties,
+                    &opened.view.mul_output_shares,
+                )
+            };
+            all_wire_shares.push(ws);
+        }
 
-            // The reconstructed seed for this party must match what the
-            // prover committed to (via the Merkle auth path check below).
-            // This is the tamper-resistance guarantee of the seed tree.
+        // Verify commitments and view consistency for all opened views.
+        for (idx, opened) in rep_proof.opened_views.iter().enumerate() {
+            let p = opened.view.party_idx;
+
             let reconstructed_seed = &reconstructed_seeds[p];
 
-            // Recompute the BLAKE3 commitment from the opened view using
-            // the reconstructed seed (since seed is serde-skipped in proof).
             let recomputed = commit_view(
                 rep,
                 p,
@@ -354,8 +371,6 @@ pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Res
                 &opened.commitment_randomness,
             );
 
-            // Compress to a Merkle leaf and verify the authentication path
-            // against this repetition's commitment root.
             let leaf = commitment_to_leaf(&recomputed);
             let merkle_proof = crate::merkle::MerkleProof {
                 leaf,
@@ -370,29 +385,27 @@ pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Res
                 });
             }
 
-            // Check that the party's wire_shares are internally consistent
-            // with the circuit's gate logic (Add, AddConst, MulConst, and
-            // Mul broadcast messages).
-            verify_party_view(&proof.circuit, &opened.view, public_inputs, num_parties)?;
+            verify_party_view(
+                &proof.circuit,
+                &all_wire_shares[idx],
+                p,
+                &opened.view.broadcast_messages,
+            )?;
         }
 
         // Verify output share consistency.
-        // All N parties' shares of each output wire must reconstruct to expected_outputs[i].
         for out_idx in 0..num_outputs {
             let wire_idx = output_start + out_idx;
 
-            // Start with the hidden party's share.
             let mut share_sum = rep_proof.hidden_output_shares[out_idx];
 
-            // Add each opened party's share of this output wire.
-            for opened in &rep_proof.opened_views {
-                let wire_shares = &opened.view.wire_shares;
+            for (idx, _) in rep_proof.opened_views.iter().enumerate() {
+                let wire_shares = &all_wire_shares[idx];
                 if wire_idx < wire_shares.len() {
                     share_sum = share_sum.wrapping_add(wire_shares[wire_idx]);
                 } else {
                     return Err(MpcithError::VerificationFailed(format!(
-                        "Repetition {rep}: party {} view has {} wires, need wire {}",
-                        opened.view.party_idx,
+                        "Repetition {rep}: party view has {} wires, need wire {}",
                         wire_shares.len(),
                         wire_idx
                     )));

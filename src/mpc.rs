@@ -1,9 +1,14 @@
 //! MPC-in-the-Head emulation.
 //!
 //! All wire shares are kept in the additive domain (Z_{2^32}).
-//! Non-linear gates (Mul, Xor) reconstruct the value, compute the result,
-//! then re-share it additively. This is correct for the MPCitH proof structure:
-//! the prover simulates all parties and records their views.
+//! Non-linear gates (Mul) reconstruct the value, compute the result,
+//! then re-share it additively.  Linear gates (Add, AddConst, MulConst,
+//! Xor, AssertEq) are computed locally from input shares.
+//!
+//! Each party's randomness is derived deterministically from its seed via
+//! a per-party ChaCha20 RNG, so the verifier can recompute any opened
+//! party's wire shares from the seed alone.  Only Mul-gate output shares
+//! (freshly re-shared from a global RNG) are stored in the proof.
 
 use crate::{
     circuit::{Circuit, Gate},
@@ -13,10 +18,6 @@ use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 
 /// Broadcast message for a multiplication gate.
-/// `sender` and `output_wire` are omitted: the sender is always the
-/// owning party (recorded in `PartyView::party_idx`), and the gate index
-/// is implicit from the position in the list — the i-th message
-/// corresponds to the i-th Mul gate encountered in circuit order.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BroadcastMessage {
     pub left_share: u32,
@@ -33,7 +34,11 @@ pub struct PartyView {
     #[serde(skip)]
     pub seed: [u8; 32],
     pub broadcast_messages: Vec<BroadcastMessage>,
-    /// All wire shares for this party (one per wire, additive domain).
+    /// One u32 per multiplication gate, in circuit order.
+    pub mul_output_shares: Vec<u32>,
+    /// Full wire shares — kept for in-memory use and tamper detection but
+    /// NOT serialized (the verifier recomputes them from the seed).
+    #[serde(skip)]
     pub wire_shares: Vec<u32>,
 }
 
@@ -45,19 +50,21 @@ impl PartyView {
             bytes.extend_from_slice(&msg.left_share.to_le_bytes());
             bytes.extend_from_slice(&msg.right_share.to_le_bytes());
         }
+        for &share in &self.mul_output_shares {
+            bytes.extend_from_slice(&share.to_le_bytes());
+        }
         bytes
     }
 
-    /// Like [`to_commitment_bytes`](Self::to_commitment_bytes) but uses an
-    /// externally-supplied seed instead of `self.seed`.  This is needed during
-    /// verification where `self.seed` is not serialized (serde skip) and must
-    /// be reconstructed from the seed-tree co-path first.
     pub fn to_commitment_bytes_with_seed(&self, seed: &[u8; 32]) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(seed);
         for msg in &self.broadcast_messages {
             bytes.extend_from_slice(&msg.left_share.to_le_bytes());
             bytes.extend_from_slice(&msg.right_share.to_le_bytes());
+        }
+        for &share in &self.mul_output_shares {
+            bytes.extend_from_slice(&share.to_le_bytes());
         }
         bytes
     }
@@ -72,11 +79,11 @@ pub struct MpcExecution {
 }
 
 /// Run the MPC-in-the-Head emulation for one repetition.
-pub fn run_mpc_emulation<R: RngCore + CryptoRng>(
+pub fn run_mpc_emulation(
     circuit: &Circuit,
     witness: &[u32],
     party_seeds: &[PartySeed],
-    rng: &mut R,
+    global_rng: &mut (impl RngCore + CryptoRng),
 ) -> crate::Result<MpcExecution> {
     let num_parties = party_seeds.len();
     assert!(num_parties >= 2);
@@ -84,14 +91,17 @@ pub fn run_mpc_emulation<R: RngCore + CryptoRng>(
     let mut shared_trace = SharedTrace::new(circuit.num_wires, num_parties);
     let mut party_broadcasts: Vec<Vec<BroadcastMessage>> = vec![Vec::new(); num_parties];
 
-    // Share the witness wires additively.
+    let mut party_rngs: Vec<_> = party_seeds
+        .iter()
+        .map(|s| s.to_rng(b"mpcith-party-share"))
+        .collect();
+
     for &value in witness.iter() {
         shared_trace
             .wires
-            .push(Sharing::share(value, num_parties, rng));
+            .push(Sharing::share_with_rngs(value, num_parties, &mut party_rngs));
     }
 
-    // Evaluate gates. All outputs are stored as additive sharings.
     for gate in &circuit.gates {
         match gate {
             Gate::Add {
@@ -107,8 +117,6 @@ pub fn run_mpc_emulation<R: RngCore + CryptoRng>(
                 right,
                 output: _,
             } => {
-                // Each party records only its own shares; sender and gate index
-                // are implicit (see BroadcastMessage docs).
                 for p in 0..num_parties {
                     party_broadcasts[p].push(BroadcastMessage {
                         left_share: shared_trace.wires[*left].shares[p],
@@ -119,26 +127,24 @@ pub fn run_mpc_emulation<R: RngCore + CryptoRng>(
                 let y = shared_trace.wires[*right].reconstruct();
                 shared_trace
                     .wires
-                    .push(Sharing::share(x.wrapping_mul(y), num_parties, rng));
+                    .push(Sharing::share(x.wrapping_mul(y), num_parties, global_rng));
             }
             Gate::Xor {
                 left,
                 right,
                 output: _,
             } => {
-                // Reconstruct, XOR, re-share additively.
                 let x = shared_trace.wires[*left].reconstruct();
                 let y = shared_trace.wires[*right].reconstruct();
                 shared_trace
                     .wires
-                    .push(Sharing::share(x ^ y, num_parties, rng));
+                    .push(Sharing::share(x ^ y, num_parties, global_rng));
             }
             Gate::AddConst {
                 input,
                 constant,
                 output: _,
             } => {
-                // Add constant to party 0's share only.
                 let s = shared_trace.wires[*input].add_const(*constant);
                 shared_trace.wires.push(s);
             }
@@ -167,11 +173,29 @@ pub fn run_mpc_emulation<R: RngCore + CryptoRng>(
         .collect();
 
     let views: Vec<PartyView> = (0..num_parties)
-        .map(|p| PartyView {
-            party_idx: p,
-            seed: party_seeds[p].0,
-            broadcast_messages: party_broadcasts[p].clone(),
-            wire_shares: shared_trace.party_view(p),
+        .map(|p| {
+            let mul_output_shares: Vec<u32> = circuit
+                .gates
+                .iter()
+                .filter_map(|g| {
+                    if matches!(g, Gate::Mul { .. } | Gate::Xor { .. }) {
+                        if let Gate::Mul { output, .. } | Gate::Xor { output, .. } = g {
+                            Some(shared_trace.wires[*output].shares[p])
+                        } else {
+                            unreachable!()
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            PartyView {
+                party_idx: p,
+                seed: party_seeds[p].0,
+                broadcast_messages: party_broadcasts[p].clone(),
+                mul_output_shares,
+                wire_shares: shared_trace.party_view(p),
+            }
         })
         .collect();
 
@@ -182,19 +206,78 @@ pub fn run_mpc_emulation<R: RngCore + CryptoRng>(
     })
 }
 
+/// Recompute a party's full wire-share vector from its seed and the
+/// circuit structure, plus the non-deterministic Mul-gate output shares.
+pub fn recompute_linear_shares(
+    circuit: &Circuit,
+    seed: &[u8; 32],
+    party_idx: usize,
+    _num_parties: usize,
+    mul_output_shares: &[u32],
+) -> Vec<u32> {
+    let party_seed = PartySeed(*seed);
+    let mut party_rng = party_seed.to_rng(b"mpcith-party-share");
+
+    let total_wires = circuit.num_wires;
+    let mut shares = vec![0u32; total_wires];
+
+    // Derive this party's shares of witness/input wires from the RNG.
+    for i in 0..circuit.num_inputs {
+        shares[i] = party_rng.next_u32();
+    }
+
+    // Walk the gates in circuit order.
+    let mut nonlinear_idx = 0;
+    for gate in &circuit.gates {
+        match gate {
+            Gate::Add {
+                left,
+                right,
+                output,
+            } => {
+                shares[*output] = shares[*left].wrapping_add(shares[*right]);
+            }
+            Gate::Mul { output, .. } | Gate::Xor { output, .. } => {
+                shares[*output] = mul_output_shares[nonlinear_idx];
+                nonlinear_idx += 1;
+            }
+            Gate::AddConst {
+                input,
+                constant,
+                output,
+            } => {
+                shares[*output] = if party_idx == 0 {
+                    shares[*input].wrapping_add(*constant)
+                } else {
+                    shares[*input]
+                };
+            }
+            Gate::MulConst {
+                input,
+                constant,
+                output,
+            } => {
+                shares[*output] = shares[*input].wrapping_mul(*constant);
+            }
+            Gate::AssertEq {
+                input,
+                output, ..
+            } => {
+                shares[*output] = shares[*input];
+            }
+        }
+    }
+
+    shares
+}
+
 /// Verify a single party's view is consistent with linear gates.
-/// Mul and Xor gates are non-local (re-shared), so only Add/AddConst/MulConst
-/// are checked locally. Mul is checked via broadcast messages.
 pub fn verify_party_view(
     circuit: &Circuit,
-    view: &PartyView,
-    _public_inputs: &[u32],
-    _num_parties: usize,
+    wire_shares: &[u32],
+    party_idx: usize,
+    broadcast_messages: &[BroadcastMessage],
 ) -> crate::Result<()> {
-    let ws = &view.wire_shares;
-
-    // Check multiplication broadcast consistency.
-    // The i-th BroadcastMessage corresponds to the i-th Mul gate in circuit order.
     let mul_gates: Vec<(usize, usize)> = circuit
         .gates
         .iter()
@@ -207,13 +290,12 @@ pub fn verify_party_view(
         })
         .collect();
 
-    for (msg, (left, right)) in view.broadcast_messages.iter().zip(mul_gates.iter()) {
-        if msg.left_share != ws[*left] || msg.right_share != ws[*right] {
-            return Err(crate::MpcithError::ConsistencyCheckFailed(view.party_idx));
+    for (msg, (left, right)) in broadcast_messages.iter().zip(mul_gates.iter()) {
+        if msg.left_share != wire_shares[*left] || msg.right_share != wire_shares[*right] {
+            return Err(crate::MpcithError::ConsistencyCheckFailed(party_idx));
         }
     }
 
-    // Check linear gates locally.
     for gate in &circuit.gates {
         match gate {
             Gate::Add {
@@ -221,9 +303,9 @@ pub fn verify_party_view(
                 right,
                 output,
             } => {
-                let expected = ws[*left].wrapping_add(ws[*right]);
-                if ws[*output] != expected {
-                    return Err(crate::MpcithError::ConsistencyCheckFailed(view.party_idx));
+                let expected = wire_shares[*left].wrapping_add(wire_shares[*right]);
+                if wire_shares[*output] != expected {
+                    return Err(crate::MpcithError::ConsistencyCheckFailed(party_idx));
                 }
             }
             Gate::AddConst {
@@ -231,14 +313,13 @@ pub fn verify_party_view(
                 constant,
                 output,
             } => {
-                // Only party 0 gets the constant added.
-                let expected = if view.party_idx == 0 {
-                    ws[*input].wrapping_add(*constant)
+                let expected = if party_idx == 0 {
+                    wire_shares[*input].wrapping_add(*constant)
                 } else {
-                    ws[*input]
+                    wire_shares[*input]
                 };
-                if ws[*output] != expected {
-                    return Err(crate::MpcithError::ConsistencyCheckFailed(view.party_idx));
+                if wire_shares[*output] != expected {
+                    return Err(crate::MpcithError::ConsistencyCheckFailed(party_idx));
                 }
             }
             Gate::MulConst {
@@ -246,12 +327,11 @@ pub fn verify_party_view(
                 constant,
                 output,
             } => {
-                let expected = ws[*input].wrapping_mul(*constant);
-                if ws[*output] != expected {
-                    return Err(crate::MpcithError::ConsistencyCheckFailed(view.party_idx));
+                let expected = wire_shares[*input].wrapping_mul(*constant);
+                if wire_shares[*output] != expected {
+                    return Err(crate::MpcithError::ConsistencyCheckFailed(party_idx));
                 }
             }
-            // Mul, Xor, AssertEq: non-local or copy, skip.
             Gate::Mul { .. } | Gate::Xor { .. } | Gate::AssertEq { .. } => {}
         }
     }
@@ -293,7 +373,14 @@ mod tests {
         let exec = run_mpc_emulation(&circuit, &[3u32, 4u32], &seeds, &mut rng).unwrap();
 
         for view in &exec.views {
-            verify_party_view(&circuit, view, &[7], 3).unwrap();
+            let ws = recompute_linear_shares(
+                &circuit,
+                &view.seed,
+                view.party_idx,
+                3,
+                &view.mul_output_shares,
+            );
+            verify_party_view(&circuit, &ws, view.party_idx, &view.broadcast_messages).unwrap();
         }
     }
 }

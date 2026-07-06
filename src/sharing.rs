@@ -40,6 +40,26 @@ impl Sharing {
         Self { shares }
     }
 
+    /// Create an additive sharing of `value` using per-party RNGs.
+    ///
+    /// Each party i (for i < N-1) draws r_i from `party_rngs[i]`; the last
+    /// party's share is the residual so that shares reconstruct to `value`.
+    pub fn share_with_rngs(
+        value: u32,
+        num_parties: usize,
+        party_rngs: &mut [impl RngCore],
+    ) -> Self {
+        assert!(num_parties >= 2, "Need at least 2 parties");
+        let mut shares = vec![0u32; num_parties];
+        let mut sum = 0u32;
+        for p in 0..num_parties - 1 {
+            shares[p] = party_rngs[p].next_u32();
+            sum = sum.wrapping_add(shares[p]);
+        }
+        shares[num_parties - 1] = value.wrapping_sub(sum);
+        Self { shares }
+    }
+
     /// Create a random XOR secret sharing of `value` among `num_parties`.
     /// Reconstruct by XOR-ing all shares.
     pub fn share_xor<R: RngCore + CryptoRng>(
