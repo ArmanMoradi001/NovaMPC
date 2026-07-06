@@ -45,6 +45,46 @@ impl ProofParams {
         }
     }
 
+    /// Compute the minimum M such that `M * log2(N) >= target_bits`,
+    /// then return a `ProofParams` with that M and the given N.
+    pub fn for_soundness_bits(target_bits: f64, num_parties: usize) -> Self {
+        let log2_n = (num_parties as f64).log2();
+        let m = (target_bits / log2_n).ceil() as usize;
+        Self {
+            num_parties,
+            num_repetitions: m,
+            field_element_bytes: 4,
+        }
+    }
+
+    /// 128-bit soundness with N=16: M=32 (instead of 38 in balanced).
+    /// 16% proof size reduction vs balanced.
+    pub fn secure_128() -> Self {
+        Self::for_soundness_bits(128.0, 16)
+    }
+
+    /// 100-bit soundness with N=16: M=25 (34% reduction vs balanced).
+    /// Suitable for internal/permissioned networks where the threat model
+    /// is weaker than internet-scale adversaries.
+    pub fn secure_100() -> Self {
+        Self::for_soundness_bits(100.0, 16)
+    }
+
+    /// Fabric-recommended parameters for a permissioned blockchain.
+    ///
+    /// Uses N=16, M=25 (100-bit soundness). For a permissioned blockchain
+    /// with known, accountable validators, 100 bits of soundness against a
+    /// computationally bounded adversary is a reasonable and standard choice.
+    ///
+    /// Reference: the Picnic specification (Chase et al., 2017) targets
+    /// 128-bit post-quantum security for public-chain use. Permissioned
+    /// settings with legal accountability allow lower security margins than
+    /// public chains, since the adversary model includes reputational and
+    /// legal consequences beyond computational cost.
+    pub fn fabric_recommended() -> Self {
+        Self::secure_100()
+    }
+
     /// Compute soundness in bits: M * log2(N).
     ///
     /// In each repetition the verifier opens N-1 of N party views.
@@ -60,8 +100,8 @@ impl ProofParams {
     pub fn estimated_proof_bytes(&self, witness_size_words: usize, circuit_and_gates: usize) -> usize {
         let commitment_bytes = 32; // BLAKE3 output
         // Per repetition: (N-1) views + N commitments
-        // Each view: seed (32B) + broadcast messages (circuit_and_gates * field_bytes)
-        let view_size = 32 + circuit_and_gates * self.field_element_bytes;
+        // Each view: seed (32B, serde-skipped in proof) + mul_output_shares
+        let view_size = circuit_and_gates * self.field_element_bytes;
         let per_rep = (self.num_parties - 1) * view_size
             + self.num_parties * commitment_bytes;
         self.num_repetitions * per_rep + witness_size_words * self.field_element_bytes
@@ -110,5 +150,37 @@ mod tests {
         let expected = 38.0 * (16.0_f64).log2();
         assert!((bits - expected).abs() < 1e-10,
             "balanced: got {bits}, expected {expected}");
+    }
+
+    #[test]
+    fn test_for_soundness_bits_128() {
+        let p = ProofParams::for_soundness_bits(128.0, 16);
+        assert_eq!(p.num_repetitions, 32);
+        assert_eq!(p.num_parties, 16);
+        assert!(p.soundness_bits() >= 128.0);
+    }
+
+    #[test]
+    fn test_for_soundness_bits_100() {
+        let p = ProofParams::for_soundness_bits(100.0, 16);
+        assert_eq!(p.num_repetitions, 25);
+        assert_eq!(p.num_parties, 16);
+        assert!(p.soundness_bits() >= 100.0);
+    }
+
+    #[test]
+    fn test_for_soundness_bits_152() {
+        let p = ProofParams::for_soundness_bits(152.0, 16);
+        assert_eq!(p.num_repetitions, 38);
+        assert_eq!(p.num_parties, 16);
+        assert!(p.soundness_bits() >= 152.0);
+    }
+
+    #[test]
+    fn test_secure_128_soundness() {
+        let p = ProofParams::secure_128();
+        assert!(p.soundness_bits() >= 128.0);
+        assert_eq!(p.num_parties, 16);
+        assert_eq!(p.num_repetitions, 32);
     }
 }

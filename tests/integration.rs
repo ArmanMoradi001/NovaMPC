@@ -90,6 +90,7 @@ fn test_range_and_membership_composition() {
 fn test_proof_sizes_table() {
     let fast = ProofParams::fast_insecure();
     let balanced = ProofParams::balanced();
+    let fabric = ProofParams::fabric_recommended();
 
     // Predicate descriptions and (predicate, witness_builder, public_inputs) tuples
     struct Case {
@@ -148,7 +149,11 @@ fn test_proof_sizes_table() {
     println!("{}", "-".repeat(80));
 
     for case in cases {
-        for (label, params) in &[("N=3 M=10", fast.clone()), ("N=16 M=38", balanced.clone())] {
+        for (label, params) in &[
+            ("N=3 M=10", fast.clone()),
+            ("N=16 M=38", balanced.clone()),
+            ("N=16 M=25", fabric.clone()),
+        ] {
             let t0 = Instant::now();
             let proof = prove(case.pred.clone(), &case.witness, &case.public, params).unwrap();
             let prove_ms = t0.elapsed().as_millis();
