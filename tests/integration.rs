@@ -254,7 +254,7 @@ fn test_tampered_commitment_root_rejected() {
     // auth-path check for that repetition (so any path that was valid under
     // the original root now fails). Either path leads to Err.
     let mut proof = make_addition_proof();
-    proof.repetitions[0].commitment_root ^= 0x01;
+    proof.repetitions[0].commitment_root[0] ^= 0x01;
     let result = verify(&proof, &[7], &ProofParams::fast_insecure());
     assert!(result.is_err(), "tampered commitment_root must cause Err");
 }
@@ -265,7 +265,7 @@ fn test_tampered_auth_path_rejected() {
     // MerkleProof::verify() recomputes the root from leaf + siblings; a wrong
     // sibling produces a root that does not match commitment_root -> Err.
     let mut proof = make_addition_proof();
-    proof.repetitions[0].opened_views[0].commitment_auth_path[0] ^= 0x01;
+    proof.repetitions[0].opened_views[0].commitment_auth_path[0][0] ^= 0x01;
     let result = verify(&proof, &[7], &ProofParams::fast_insecure());
     assert!(result.is_err(), "tampered auth path must cause Err");
 }

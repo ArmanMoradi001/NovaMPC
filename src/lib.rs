@@ -15,6 +15,7 @@
 
 pub mod circuit;
 pub mod commitment;
+pub mod commit_merkle;
 pub mod error;
 pub mod fiat_shamir;
 pub mod merkle;

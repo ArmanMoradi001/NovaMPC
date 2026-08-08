@@ -2,10 +2,9 @@
 
 use crate::{
     circuit::Circuit,
-    commitment::{commit_view, Commitment, CommitmentMatrix},
+    commitment::{commit_view, CommitmentMatrix},
+    commit_merkle::{CommitTree, CommitMerkleProof},
     fiat_shamir::{derive_challenges, hash_circuit},
-    merkle::MerkleTree,
-    mimc::{mimc_hash_native, MIMC_ROUNDS},
     mpc::{run_mpc_emulation, recompute_linear_shares, verify_party_view, MpcExecution, PartyView},
     params::ProofParams,
     predicate::{CompiledPredicate, CompoundPredicate, Predicate},
@@ -16,36 +15,6 @@ use crate::{
 use rand::thread_rng;
 use serde::{Deserialize, Serialize};
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-/// Compress a 32-byte BLAKE3 [`Commitment`] to a single `u32` Merkle leaf.
-///
-/// The 32 bytes are split into 8 × `u32` chunks (little-endian) and folded
-/// left-to-right with [`mimc_hash_native`], keeping only the left output word.
-///
-/// **Design choice**: MiMC folding rather than taking the first 4 raw bytes.
-/// Taking raw bytes would reduce collision resistance to 32 bits with trivial
-/// invertibility; a MiMC chain is a permutation whose inversion requires
-/// solving the MiMC algebraic system — harder to exploit.
-///
-/// **Tradeoff**: the chain reduces per-leaf collision resistance from 256 bits
-/// (BLAKE3) to 32 bits (MiMC over Z_{2^32}). This is acceptable because the
-/// Merkle tree is used only to authenticate *which* commitment belongs to which
-/// party. The binding guarantee that matters — that the prover cannot swap a
-/// party's view after committing — still comes from the BLAKE3 commitment
-/// recomputed and path-verified inside [`verify`]. An attacker who forged a
-/// Merkle leaf would also need to produce a BLAKE3 pre-image collision, which
-/// is computationally infeasible.
-fn commitment_to_leaf(c: &Commitment) -> u32 {
-    let chunks: [u32; 8] =
-        std::array::from_fn(|i| u32::from_le_bytes(c.0[i * 4..(i + 1) * 4].try_into().unwrap()));
-    let mut acc = mimc_hash_native(chunks[0], chunks[1], MIMC_ROUNDS).0;
-    for i in 2..8usize {
-        acc = mimc_hash_native(acc, chunks[i], MIMC_ROUNDS).0;
-    }
-    acc
-}
-
 // ─── Data structures ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,18 +24,18 @@ pub struct OpenedView {
     /// Merkle authentication path (siblings) proving this party's commitment
     /// leaf is included under [`RepetitionProof::commitment_root`].
     /// The i-th sibling corresponds to tree level i (leaf level = 0).
-    pub commitment_auth_path: Vec<u32>,
+    pub commitment_auth_path: Vec<[u8; 32]>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepetitionProof {
     /// Index of the party whose view is HIDDEN.
     pub hidden_party: usize,
-    /// MiMC-Merkle root over the N per-party commitment leaves for this
+    /// BLAKE3-Merkle root over the N per-party commitment leaves for this
     /// repetition. Replaces the old `Vec<Commitment>`: the hidden party's raw
     /// commitment is never transmitted; the root binds all N commitments and
     /// serves as the Fiat-Shamir input for this repetition.
-    pub commitment_root: u32,
+    pub commitment_root: [u8; 32],
     /// GGM seed-tree co-path for the hidden party. Contains
     /// log₂(N_padded) sibling seeds (32 bytes each), ordered from leaf
     /// level up to just below root. The verifier reconstructs all N-1
@@ -189,19 +158,19 @@ fn prove_compiled(
     }
 
     // ── Phase 1.5: Build per-repetition commitment Merkle trees ──────────
-    let commit_trees: Vec<MerkleTree> = (0..num_repetitions)
+    let commit_trees: Vec<CommitTree> = (0..num_repetitions)
         .map(|rep| {
-            let leaves: Vec<u32> = (0..num_parties)
-                .map(|p| commitment_to_leaf(commit_matrix.get(rep, p)))
+            let leaves: Vec<[u8; 32]> = (0..num_parties)
+                .map(|p| commit_matrix.get(rep, p).0)
                 .collect();
-            MerkleTree::build(&leaves)
+            CommitTree::build(&leaves)
         })
         .collect();
 
     // ── Phase 2: Challenge (Fiat-Shamir) ──────────────────────────────────
-    let mut commit_bytes = Vec::with_capacity(num_repetitions * 4);
+    let mut commit_bytes = Vec::with_capacity(num_repetitions * 32);
     for tree in &commit_trees {
-        commit_bytes.extend_from_slice(&tree.root().to_le_bytes());
+        commit_bytes.extend_from_slice(&tree.root());
     }
     let challenges = derive_challenges(
         &commit_bytes,
@@ -291,10 +260,10 @@ pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Res
     let output_start = proof.num_circuit_wires - num_outputs;
 
     // ── Step 1: Recompute Fiat-Shamir challenges ───────────────────────────
-    // Mirrors prove(): collect one u32 root per repetition.
-    let mut commit_bytes = Vec::with_capacity(proof.repetitions.len() * 4);
+    // Mirrors prove(): collect one [u8;32] root per repetition.
+    let mut commit_bytes = Vec::with_capacity(proof.repetitions.len() * 32);
     for rep_proof in &proof.repetitions {
-        commit_bytes.extend_from_slice(&rep_proof.commitment_root.to_le_bytes());
+        commit_bytes.extend_from_slice(&rep_proof.commitment_root);
     }
 
     let expected_challenges = derive_challenges(
@@ -371,8 +340,8 @@ pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Res
                 &opened.commitment_randomness,
             );
 
-            let leaf = commitment_to_leaf(&recomputed);
-            let merkle_proof = crate::merkle::MerkleProof {
+            let leaf = recomputed.0;
+            let merkle_proof = CommitMerkleProof {
                 leaf,
                 leaf_index: p,
                 siblings: opened.commitment_auth_path.clone(),
