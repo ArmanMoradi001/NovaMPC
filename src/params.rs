@@ -4,7 +4,8 @@ use serde::{Serialize, Deserialize};
 /// Parameters controlling proof size vs soundness trade-off.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProofParams {
-    /// Number of virtual MPC parties (N). Must be >= 3.
+    /// Number of virtual MPC parties (N). Must be exactly 3: the protocol
+    /// uses the ZKBoo 3-party verifiable multiplication scheme.
     pub num_parties: usize,
 
     /// Number of parallel repetitions (M).
@@ -25,14 +26,11 @@ impl ProofParams {
         }
     }
 
-    /// Balanced parameters: N=16, M=38 → soundness ≈ 2^{-152}.
-    /// Smaller proofs, faster verification (Picnic-style).
+    /// Balanced parameters: N=3, M=96 → soundness ≈ 2^{-152} (M·log₂3).
+    /// The protocol requires exactly 3 parties (ZKBoo verifiable
+    /// multiplication), so the previous N=16/M=38 set is rebalanced to N=3.
     pub fn balanced() -> Self {
-        Self {
-            num_parties: 16,
-            num_repetitions: 38,
-            field_element_bytes: 4,
-        }
+        Self::for_soundness_bits(152.0, 3)
     }
 
     /// Fast/test parameters: N=3, M=10 → soundness ≈ 2^{-16}.
@@ -57,22 +55,21 @@ impl ProofParams {
         }
     }
 
-    /// 128-bit soundness with N=16: M=32 (instead of 38 in balanced).
-    /// 16% proof size reduction vs balanced.
+    /// 128-bit soundness with N=3: M=81 (instead of the old N=16/M=32 set).
     pub fn secure_128() -> Self {
-        Self::for_soundness_bits(128.0, 16)
+        Self::for_soundness_bits(128.0, 3)
     }
 
-    /// 100-bit soundness with N=16: M=25 (34% reduction vs balanced).
+    /// 100-bit soundness with N=3: M=64.
     /// Suitable for internal/permissioned networks where the threat model
     /// is weaker than internet-scale adversaries.
     pub fn secure_100() -> Self {
-        Self::for_soundness_bits(100.0, 16)
+        Self::for_soundness_bits(100.0, 3)
     }
 
     /// Fabric-recommended parameters for a permissioned blockchain.
     ///
-    /// Uses N=16, M=25 (100-bit soundness). For a permissioned blockchain
+    /// Uses N=3, M=64 (100-bit soundness). For a permissioned blockchain
     /// with known, accountable validators, 100 bits of soundness against a
     /// computationally bounded adversary is a reasonable and standard choice.
     ///
@@ -109,9 +106,9 @@ impl ProofParams {
 
     /// Validate parameters are sensible.
     pub fn validate(&self) -> crate::Result<()> {
-        if self.num_parties < 3 {
+        if self.num_parties != 3 {
             return Err(crate::MpcithError::InvalidParams(
-                "num_parties must be >= 3".into(),
+                "num_parties must be exactly 3 (the protocol uses the ZKBoo 3-party verifiable multiplication scheme)".into(),
             ));
         }
         if self.num_repetitions < 1 {
@@ -124,7 +121,7 @@ impl ProofParams {
 }
 
 impl Default for ProofParams {
-    /// Defaults to balanced (N=16, M=38) for ≈2^{-152} soundness.
+    /// Defaults to balanced (N=3, M=96) for ≈2^{-152} soundness.
     fn default() -> Self {
         Self::balanced()
     }
@@ -147,32 +144,32 @@ mod tests {
     fn test_soundness_bits_balanced() {
         let p = ProofParams::balanced();
         let bits = p.soundness_bits();
-        let expected = 38.0 * (16.0_f64).log2();
+        let expected = 96.0 * (3.0_f64).log2();
         assert!((bits - expected).abs() < 1e-10,
             "balanced: got {bits}, expected {expected}");
     }
 
     #[test]
     fn test_for_soundness_bits_128() {
-        let p = ProofParams::for_soundness_bits(128.0, 16);
-        assert_eq!(p.num_repetitions, 32);
-        assert_eq!(p.num_parties, 16);
+        let p = ProofParams::for_soundness_bits(128.0, 3);
+        assert_eq!(p.num_repetitions, 81);
+        assert_eq!(p.num_parties, 3);
         assert!(p.soundness_bits() >= 128.0);
     }
 
     #[test]
     fn test_for_soundness_bits_100() {
-        let p = ProofParams::for_soundness_bits(100.0, 16);
-        assert_eq!(p.num_repetitions, 25);
-        assert_eq!(p.num_parties, 16);
+        let p = ProofParams::for_soundness_bits(100.0, 3);
+        assert_eq!(p.num_repetitions, 64);
+        assert_eq!(p.num_parties, 3);
         assert!(p.soundness_bits() >= 100.0);
     }
 
     #[test]
     fn test_for_soundness_bits_152() {
-        let p = ProofParams::for_soundness_bits(152.0, 16);
-        assert_eq!(p.num_repetitions, 38);
-        assert_eq!(p.num_parties, 16);
+        let p = ProofParams::for_soundness_bits(152.0, 3);
+        assert_eq!(p.num_repetitions, 96);
+        assert_eq!(p.num_parties, 3);
         assert!(p.soundness_bits() >= 152.0);
     }
 
@@ -180,7 +177,7 @@ mod tests {
     fn test_secure_128_soundness() {
         let p = ProofParams::secure_128();
         assert!(p.soundness_bits() >= 128.0);
-        assert_eq!(p.num_parties, 16);
-        assert_eq!(p.num_repetitions, 32);
+        assert_eq!(p.num_parties, 3);
+        assert_eq!(p.num_repetitions, 81);
     }
 }

@@ -151,8 +151,8 @@ fn test_proof_sizes_table() {
     for case in cases {
         for (label, params) in &[
             ("N=3 M=10", fast.clone()),
-            ("N=16 M=38", balanced.clone()),
-            ("N=16 M=25", fabric.clone()),
+            ("N=3 M=96", balanced.clone()),
+            ("N=3 M=64", fabric.clone()),
         ] {
             let t0 = Instant::now();
             let proof = prove(case.pred.clone(), &case.witness, &case.public, params).unwrap();
@@ -169,6 +169,42 @@ fn test_proof_sizes_table() {
             );
         }
     }
+}
+
+#[test]
+fn test_serialized_roundtrip_mul_heavy_predicates() {
+    // The deserialized path drops `wire_shares`, so the verifier must rebuild
+    // the residual party's inputs from the transmitted `residual_input_shares`
+    // and every Mul share from the seed-derived ZKBoo formula.  RangeCheck and
+    // SetMembership contain many Mul (and Xor) gates, so this exercises the
+    // full fix end-to-end over a serialized proof.
+    let params = ProofParams::fast_insecure();
+
+    let lo = 0u32;
+    let hi = 1000u32;
+    let x = 500u32;
+    let range_pred = Predicate::RangeCheck { lo, hi };
+    let r_witness = range_witness(x, lo, hi);
+    let range_proof = prove(range_pred, &r_witness, &[lo, hi], &params).unwrap();
+    let range_bytes = bincode::serialize(&range_proof).unwrap();
+    let range_rt: Proof = bincode::deserialize(&range_bytes).unwrap();
+    assert!(
+        verify(&range_rt, &[lo, hi], &params).unwrap(),
+        "deserialized RangeCheck proof must verify"
+    );
+
+    let members: Vec<u32> = vec![10, 20, 30, 42, 50, 60, 70, 80];
+    let tree = MerkleTree::build(&members);
+    let root = tree.root();
+    let mp = tree.prove_membership(3);
+    let mem_pred = Predicate::SetMembership { members };
+    let mem_proof = prove(mem_pred, &membership_witness(&mp), &[root], &params).unwrap();
+    let mem_bytes = bincode::serialize(&mem_proof).unwrap();
+    let mem_rt: Proof = bincode::deserialize(&mem_bytes).unwrap();
+    assert!(
+        verify(&mem_rt, &[root], &params).unwrap(),
+        "deserialized SetMembership proof must verify"
+    );
 }
 
 #[test]

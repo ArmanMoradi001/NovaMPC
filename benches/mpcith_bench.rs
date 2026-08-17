@@ -14,7 +14,7 @@ fn bench_prove(c: &mut Criterion) {
     for (label, params) in [
         ("fast_n3_m10", ProofParams::fast_insecure()),
         ("low_n3_m64", ProofParams::low_n()),
-        ("balanced_n16_m38", ProofParams::balanced()),
+        ("balanced_n3_m96", ProofParams::balanced()),
     ] {
         group.bench_with_input(
             BenchmarkId::new("addition", label),
@@ -41,7 +41,7 @@ fn bench_verify(c: &mut Criterion) {
 
     for (label, params) in [
         ("fast_n3_m10", ProofParams::fast_insecure()),
-        ("balanced_n16_m38", ProofParams::balanced()),
+        ("balanced_n3_m96", ProofParams::balanced()),
     ] {
         let proof = prove(
             Predicate::AdditionCheck { expected_sum: 7 },

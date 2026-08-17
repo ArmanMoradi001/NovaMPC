@@ -321,12 +321,21 @@ pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Res
                     p,
                     num_parties,
                     &opened.view.mul_output_shares,
+                    &opened.view.residual_input_shares,
                 )
             };
             all_wire_shares.push(ws);
         }
 
         // Verify commitments and view consistency for all opened views.
+        // Map each opened party index to its position in `all_wire_shares` so
+        // we can hand the verifier a party's right neighbour's data when it is
+        // also opened (required for the ZKBoo Mul share check).
+        let mut opened_index_of: Vec<usize> = vec![usize::MAX; num_parties];
+        for (i, op) in rep_proof.opened_views.iter().enumerate() {
+            opened_index_of[op.view.party_idx] = i;
+        }
+
         for (idx, opened) in rep_proof.opened_views.iter().enumerate() {
             let p = opened.view.party_idx;
 
@@ -354,10 +363,28 @@ pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Res
                 });
             }
 
+            // Right neighbour ((p+1) % 3) data — only available if that party
+            // is also opened.  If it is the hidden party, its Mul share is
+            // structurally unverifiable and skipped by the 2-of-3 scheme.
+            let next = (p + 1) % num_parties;
+            let next_opened = if next != rep_proof.hidden_party {
+                let next_idx = opened_index_of[next];
+                if next_idx == usize::MAX {
+                    return Err(MpcithError::VerificationFailed(format!(
+                        "Repetition {rep}: opened party {next} missing from opened views"
+                    )));
+                }
+                Some((&reconstructed_seeds[next], all_wire_shares[next_idx].as_slice()))
+            } else {
+                None
+            };
+
             verify_party_view(
                 &proof.circuit,
                 &all_wire_shares[idx],
                 p,
+                reconstructed_seed,
+                next_opened,
             )?;
         }
 
@@ -458,6 +485,36 @@ mod tests {
     }
 
     #[test]
+    fn test_serialized_proof_roundtrip() {
+        // Prove in-memory, then serialize/deserialize so `wire_shares` is
+        // dropped and the verifier must rebuild every opened party's shares
+        // from the seed tree co-path, the transmitted residual-input shares
+        // (last party) and the committed Mul output shares.  This exercises
+        // the real networked-verification path, including the ZKBoo Mul check.
+        let params = fast_params();
+
+        let mul_pred = Predicate::MultiplicationCheck {
+            expected_product: 12,
+        };
+        let mul_proof = prove(mul_pred, &[3, 4], &[12], &params).unwrap();
+        let mul_bytes = bincode::serialize(&mul_proof).unwrap();
+        let mul_roundtrip: Proof = bincode::deserialize(&mul_bytes).unwrap();
+        assert!(
+            verify(&mul_roundtrip, &[12], &params).unwrap(),
+            "deserialized MultiplicationCheck proof must verify"
+        );
+
+        let add_pred = Predicate::AdditionCheck { expected_sum: 7 };
+        let add_proof = prove(add_pred, &[3, 4], &[7], &params).unwrap();
+        let add_bytes = bincode::serialize(&add_proof).unwrap();
+        let add_roundtrip: Proof = bincode::deserialize(&add_bytes).unwrap();
+        assert!(
+            verify(&add_roundtrip, &[7], &params).unwrap(),
+            "deserialized AdditionCheck proof must verify"
+        );
+    }
+
+    #[test]
     fn test_set_membership_prove_verify() {
         let params = fast_params();
         let members = vec![10u32, 20, 30, 42];
@@ -553,7 +610,7 @@ mod tests {
         let proof = prove(pred, &witness, &[0, 1000], &params).unwrap();
         let size = proof.serialized_size();
         println!(
-            "Range proof size (balanced params, N=16 M=38): {} bytes",
+            "Range proof size (balanced params, N=3 M=96): {} bytes",
             size
         );
         assert!(verify(&proof, &[0, 1000], &params).unwrap());
@@ -595,7 +652,7 @@ mod tests {
         let proof = prove_compound(compound, &witness, &public_inputs, &params).unwrap();
         let size = proof.serialized_size();
         println!(
-            "Compound proof size (balanced params, N=16 M=38): {} bytes",
+            "Compound proof size (balanced params, N=3 M=96): {} bytes",
             size
         );
         assert!(verify(&proof, &public_inputs, &params).unwrap());

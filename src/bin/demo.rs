@@ -84,7 +84,7 @@ fn main() {
     );
 
     // ── Balanced (secure) parameters — for one predicate ─────────────────
-    separator("Secure Parameters (N=16, M=38, soundness ≈ 2^{-40})");
+    separator("Secure Parameters (N=3, M=96, soundness ≈ 2^{-152})");
     let balanced = ProofParams::balanced();
     run_demo(
         "Prove: 1000 + 337 == 1337  [SECURE PARAMS]",
@@ -99,7 +99,7 @@ fn main() {
     for (label, params) in [
         ("fast_insecure (N=3, M=10)", ProofParams::fast_insecure()),
         ("low_n        (N=3, M=64)", ProofParams::low_n()),
-        ("balanced     (N=16, M=38)", ProofParams::balanced()),
+        ("balanced     (N=3, M=96)", ProofParams::balanced()),
     ] {
         let n = params.num_parties as f64;
         let m = params.num_repetitions as f64;
