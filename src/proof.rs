@@ -2,16 +2,16 @@
 
 use crate::{
     circuit::Circuit,
+    commit_merkle::{CommitMerkleProof, CommitTree},
     commitment::{commit_view, CommitmentMatrix},
-    commit_merkle::{CommitTree, CommitMerkleProof},
     fiat_shamir::{derive_challenges, hash_circuit},
     mpc::{
-        run_mpc_emulation, recompute_linear_shares, verify_party_view, MpcExecution, OpenedNeighbor,
-        PartyView, XorGateAux,
+        recompute_linear_shares, run_mpc_emulation, verify_party_view, MpcExecution,
+        OpenedNeighbor, PartyView, XorGateAux,
     },
     params::ProofParams,
     predicate::{CompiledPredicate, CompoundPredicate, Predicate},
-    seed_tree::{SeedTree, reconstruct_leaves_from_co_path},
+    seed_tree::{reconstruct_leaves_from_co_path, SeedTree},
     sharing::PartySeed,
     MpcithError, Result,
 };
@@ -47,8 +47,24 @@ pub struct RepetitionProof {
     pub co_path: Vec<[u8; 32]>,
     /// Opened views for all parties except hidden_party.
     pub opened_views: Vec<OpenedView>,
-    /// Hidden party's share of each output wire.
-    pub hidden_output_shares: Vec<u32>,
+    /// Every party's share of each circuit output wire, indexed
+    /// `[output_idx][party]`. Published for ALL parties, including the
+    /// hidden one — revealing an additive share of a publicly-checked value
+    /// leaks nothing about the witness. These shares (together with
+    /// `assert_shares`) are hashed into the Fiat-Shamir transcript BEFORE
+    /// the hidden party is chosen, so a prover cannot bias them after
+    /// learning which party will stay hidden.
+    pub output_shares: Vec<Vec<u32>>,
+    /// Every party's share of each `AssertEq` gate's input wire, indexed
+    /// `[gate_idx][party]`, bound into the transcript the same way as
+    /// `output_shares`. Lets the verifier check
+    /// `Σ_p assert_shares[gate][p] == circuit.gates[gate].expected` for
+    /// every assertion in the circuit (not just the declared output),
+    /// closing the gap where `AssertEq` gates — including the boolean and
+    /// reconstruction checks inside `bit_decompose`, and hence RangeCheck /
+    /// SetMembership correctness — were never actually enforced in the MPC
+    /// verification path.
+    pub assert_shares: Vec<Vec<u32>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,6 +88,24 @@ impl Proof {
     pub fn serialized_size(&self) -> usize {
         bincode::serialize(self).map(|b| b.len()).unwrap_or(0)
     }
+}
+
+/// Serialize per-party `AssertEq`/output shares in a canonical order for
+/// binding into the Fiat-Shamir transcript. Must match exactly between
+/// `prove_compiled` and `verify`.
+fn encode_public_shares(assert_shares: &[Vec<u32>], output_shares: &[Vec<u32>]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for shares in assert_shares {
+        for &s in shares {
+            bytes.extend_from_slice(&s.to_le_bytes());
+        }
+    }
+    for shares in output_shares {
+        for &s in shares {
+            bytes.extend_from_slice(&s.to_le_bytes());
+        }
+    }
+    bytes
 }
 
 // ─── Proof generation ─────────────────────────────────────────────────────────
@@ -120,6 +154,11 @@ fn prove_compiled(
 
     // The expected output is the actual output wire values from a plain evaluation.
     let expected_outputs: Vec<u32> = circuit.outputs(&full_trace).to_vec();
+    // Every `AssertEq` gate in the circuit, as (input_wire, expected constant).
+    // Used to bind and independently check every assertion — not just the
+    // final declared output — against the actual MPC shares.
+    let assert_constraints = circuit.assert_constraints();
+    let output_start = circuit.num_wires - circuit.num_outputs;
 
     let num_parties = params.num_parties;
     let num_repetitions = params.num_repetitions;
@@ -129,6 +168,10 @@ fn prove_compiled(
     let mut all_executions: Vec<MpcExecution> = Vec::with_capacity(num_repetitions);
     let mut all_commitment_randomness: Vec<Vec<[u8; 32]>> = Vec::with_capacity(num_repetitions);
     let mut all_root_seeds: Vec<[u8; 32]> = Vec::with_capacity(num_repetitions);
+    // Per-repetition, every party's share of every output wire / AssertEq
+    // input wire — see `RepetitionProof::output_shares`/`assert_shares`.
+    let mut all_output_shares: Vec<Vec<Vec<u32>>> = Vec::with_capacity(num_repetitions);
+    let mut all_assert_shares: Vec<Vec<Vec<u32>>> = Vec::with_capacity(num_repetitions);
     let mut commit_matrix = CommitmentMatrix::new(num_repetitions, num_parties);
 
     for rep in 0..num_repetitions {
@@ -144,6 +187,22 @@ fn prove_compiled(
 
         let exec = run_mpc_emulation(circuit, witness, &seeds, &mut rng)?;
 
+        let output_shares: Vec<Vec<u32>> = (output_start..circuit.num_wires)
+            .map(|w| {
+                (0..num_parties)
+                    .map(|p| exec.shared_trace.wires[w].shares[p])
+                    .collect()
+            })
+            .collect();
+        let assert_shares: Vec<Vec<u32>> = assert_constraints
+            .iter()
+            .map(|&(wire, _)| {
+                (0..num_parties)
+                    .map(|p| exec.shared_trace.wires[wire].shares[p])
+                    .collect()
+            })
+            .collect();
+
         let mut rep_randomness: Vec<[u8; 32]> = Vec::with_capacity(num_parties);
         for p in 0..num_parties {
             let mut rand = [0u8; 32];
@@ -156,6 +215,8 @@ fn prove_compiled(
             rep_randomness.push(rand);
         }
 
+        all_output_shares.push(output_shares);
+        all_assert_shares.push(assert_shares);
         all_executions.push(exec);
         all_commitment_randomness.push(rep_randomness);
     }
@@ -171,9 +232,16 @@ fn prove_compiled(
         .collect();
 
     // ── Phase 2: Challenge (Fiat-Shamir) ──────────────────────────────────
+    // Bind each repetition's commitment root AND its (public, per-party)
+    // output/assert shares into the transcript BEFORE the hidden party is
+    // chosen, so the prover cannot pick those shares adaptively afterwards.
     let mut commit_bytes = Vec::with_capacity(num_repetitions * 32);
-    for tree in &commit_trees {
+    for (rep, tree) in commit_trees.iter().enumerate() {
         commit_bytes.extend_from_slice(&tree.root());
+        commit_bytes.extend_from_slice(&encode_public_shares(
+            &all_assert_shares[rep],
+            &all_output_shares[rep],
+        ));
     }
     let challenges = derive_challenges(
         &commit_bytes,
@@ -205,17 +273,13 @@ fn prove_compiled(
             tree.co_path(hidden)
         };
 
-        let output_start = circuit.num_wires - circuit.num_outputs;
-        let hidden_output_shares: Vec<u32> = (output_start..circuit.num_wires)
-            .map(|w| exec.shared_trace.wires[w].shares[hidden])
-            .collect();
-
         repetition_proofs.push(RepetitionProof {
             hidden_party: hidden,
             commitment_root: commit_trees[rep].root(),
             co_path,
             opened_views,
-            hidden_output_shares,
+            output_shares: all_output_shares[rep].clone(),
+            assert_shares: all_assert_shares[rep].clone(),
         });
     }
 
@@ -261,12 +325,44 @@ pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Res
     let num_parties = params.num_parties;
     let num_outputs = proof.num_circuit_outputs;
     let output_start = proof.num_circuit_wires - num_outputs;
+    let assert_constraints = proof.circuit.assert_constraints();
 
     // ── Step 1: Recompute Fiat-Shamir challenges ───────────────────────────
-    // Mirrors prove(): collect one [u8;32] root per repetition.
+    // Mirrors prove(): collect the commitment root AND the (public,
+    // per-party) output/assert shares for each repetition, in the same
+    // order used by `prove_compiled`.
     let mut commit_bytes = Vec::with_capacity(proof.repetitions.len() * 32);
     for rep_proof in &proof.repetitions {
+        if rep_proof.assert_shares.len() != assert_constraints.len() {
+            return Err(MpcithError::VerificationFailed(format!(
+                "Expected {} AssertEq share rows, got {}",
+                assert_constraints.len(),
+                rep_proof.assert_shares.len()
+            )));
+        }
+        if rep_proof.output_shares.len() != num_outputs {
+            return Err(MpcithError::VerificationFailed(format!(
+                "Expected {num_outputs} output share rows, got {}",
+                rep_proof.output_shares.len()
+            )));
+        }
+        for row in rep_proof
+            .assert_shares
+            .iter()
+            .chain(rep_proof.output_shares.iter())
+        {
+            if row.len() != num_parties {
+                return Err(MpcithError::VerificationFailed(
+                    "Malformed per-party share row (wrong party count)".into(),
+                ));
+            }
+        }
+
         commit_bytes.extend_from_slice(&rep_proof.commitment_root);
+        commit_bytes.extend_from_slice(&encode_public_shares(
+            &rep_proof.assert_shares,
+            &rep_proof.output_shares,
+        ));
     }
 
     let expected_challenges = derive_challenges(
@@ -351,7 +447,9 @@ pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Res
                 rep,
                 p,
                 reconstructed_seed,
-                &opened.view.to_commitment_bytes_with_seed(reconstructed_seed),
+                &opened
+                    .view
+                    .to_commitment_bytes_with_seed(reconstructed_seed),
                 &opened.commitment_randomness,
             );
 
@@ -397,31 +495,67 @@ pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Res
                 &opened.view.xor_bit_shares,
                 next_opened,
             )?;
-        }
 
-        // Verify output share consistency.
-        for out_idx in 0..num_outputs {
-            let wire_idx = output_start + out_idx;
-
-            let mut share_sum = rep_proof.hidden_output_shares[out_idx];
-
-            for (idx, _) in rep_proof.opened_views.iter().enumerate() {
-                let wire_shares = &all_wire_shares[idx];
-                if wire_idx < wire_shares.len() {
-                    share_sum = share_sum.wrapping_add(wire_shares[wire_idx]);
-                } else {
+            // Cross-check the publicly-revealed per-party assert/output
+            // shares against this opened party's own (committed) view. A
+            // cheating prover cannot reveal one set of shares for the
+            // Σ==expected checks below while using different, inconsistent
+            // shares in the committed view used for the Mul/Xor/AssertEq
+            // checks above.
+            for (gate_idx, &(wire, _)) in assert_constraints.iter().enumerate() {
+                if rep_proof.assert_shares[gate_idx][p] != all_wire_shares[idx][wire] {
                     return Err(MpcithError::VerificationFailed(format!(
-                        "Repetition {rep}: party view has {} wires, need wire {}",
-                        wire_shares.len(),
-                        wire_idx
+                        "Repetition {rep}: party {p} assert-share mismatch for gate {gate_idx}"
                     )));
                 }
             }
+            for out_idx in 0..num_outputs {
+                let wire_idx = output_start + out_idx;
+                if rep_proof.output_shares[out_idx][p] != all_wire_shares[idx][wire_idx] {
+                    return Err(MpcithError::VerificationFailed(format!(
+                        "Repetition {rep}: party {p} output-share mismatch for output {out_idx}"
+                    )));
+                }
+            }
+        }
 
-            let expected = proof.expected_outputs[out_idx];
-            if share_sum != expected {
+        // Verify every AssertEq gate's constraint: the sum of ALL N parties'
+        // shares (opened AND hidden) of the gate's input wire must equal the
+        // gate's public `expected` constant embedded in the circuit. This is
+        // what actually enforces AssertEq — previously this was a no-op in
+        // the MPC verification path, so boolean/range/membership checks
+        // (and any other assertion) were never verified at all.
+        for (gate_idx, &(_, expected)) in assert_constraints.iter().enumerate() {
+            let sum = rep_proof.assert_shares[gate_idx]
+                .iter()
+                .fold(0u32, |acc, &s| acc.wrapping_add(s));
+            if sum != expected {
                 return Err(MpcithError::VerificationFailed(format!(
-                    "Repetition {rep}: output[{out_idx}] reconstructed as {share_sum}, expected {expected}"
+                    "Repetition {rep}: AssertEq gate {gate_idx} failed (reconstructed {sum}, expected {expected})"
+                )));
+            }
+        }
+
+        // Verify output share consistency: the sum of ALL N parties' shares
+        // of each output wire must equal the expected output value. Prefer
+        // the value derived directly from the circuit's own AssertEq gate (a
+        // public constant bound into circuit_hash) over the prover-supplied
+        // `expected_outputs` field whenever the output wire is the target of
+        // such a gate — which is the case for every predicate in this crate.
+        for out_idx in 0..num_outputs {
+            let wire_idx = output_start + out_idx;
+            let sum = rep_proof.output_shares[out_idx]
+                .iter()
+                .fold(0u32, |acc, &s| acc.wrapping_add(s));
+
+            let expected = proof
+                .circuit
+                .assert_expected_for_output(wire_idx)
+                .unwrap_or(proof.expected_outputs[out_idx]);
+
+            if sum != expected {
+                return Err(MpcithError::VerificationFailed(format!(
+                    "Repetition {rep}: output[{out_idx}] reconstructed as {sum}, expected {expected}"
                 )));
             }
         }
@@ -448,6 +582,68 @@ mod tests {
         let pred = Predicate::AdditionCheck { expected_sum: 7 };
         let proof = prove(pred, &[3, 4], &[7], &params).unwrap();
         assert!(verify(&proof, &[7], &params).unwrap());
+    }
+
+    #[test]
+    fn test_forged_expected_outputs_field_is_inert() {
+        // Proof::expected_outputs used to be the *sole* value the verifier
+        // checked reconstructed output shares against, with nothing tying
+        // it to the real, publicly-known target. Tampering it should now
+        // have NO effect: the verifier derives the true expected value from
+        // the circuit's own AssertEq gate instead.
+        let params = fast_params();
+        let pred = Predicate::AdditionCheck { expected_sum: 7 };
+        let mut proof = prove(pred, &[3, 4], &[7], &params).unwrap();
+        proof.expected_outputs[0] = 999;
+        assert!(
+            verify(&proof, &[7], &params).unwrap(),
+            "tampering the prover-supplied expected_outputs field must not affect verification"
+        );
+    }
+
+    #[test]
+    fn test_forged_assert_share_sum_rejected() {
+        // Before this fix, AssertEq gates (including the boolean and
+        // reconstruction checks generated by bit_decompose for RangeCheck)
+        // were never checked in the MPC verification path. Breaking the
+        // additive sum of any AssertEq gate's per-party shares must now be
+        // rejected.
+        let params = fast_params();
+        let pred = Predicate::RangeCheck { lo: 1, hi: 1000 };
+        let witness = range_witness(500, 1, 1000);
+        let mut proof = prove(pred, &witness, &[1, 1000], &params).unwrap();
+        assert!(verify(&proof, &[1, 1000], &params).unwrap());
+
+        // Tamper party 0's share of the very first AssertEq gate (a boolean
+        // check b*(b-1)==0 from bit_decompose). This breaks the sum, so it
+        // must be rejected regardless of which party ends up hidden.
+        proof.repetitions[0].assert_shares[0][0] =
+            proof.repetitions[0].assert_shares[0][0].wrapping_add(1);
+        let result = verify(&proof, &[1, 1000], &params);
+        assert!(result.is_err(), "forged AssertEq share sum must cause Err");
+    }
+
+    #[test]
+    fn test_forged_assert_share_shift_rejected() {
+        // Shifting a value between two parties' shares of the same AssertEq
+        // gate preserves the additive sum, but must still be rejected
+        // because opened parties' revealed shares are cross-checked against
+        // their own committed view.
+        let params = fast_params();
+        let pred = Predicate::RangeCheck { lo: 1, hi: 1000 };
+        let witness = range_witness(500, 1, 1000);
+        let mut proof = prove(pred, &witness, &[1, 1000], &params).unwrap();
+        assert!(verify(&proof, &[1, 1000], &params).unwrap());
+
+        proof.repetitions[0].assert_shares[0][0] =
+            proof.repetitions[0].assert_shares[0][0].wrapping_add(1);
+        proof.repetitions[0].assert_shares[0][1] =
+            proof.repetitions[0].assert_shares[0][1].wrapping_sub(1);
+        let result = verify(&proof, &[1, 1000], &params);
+        assert!(
+            result.is_err(),
+            "sum-preserving shift between parties' AssertEq shares must still be rejected"
+        );
     }
 
     #[test]
@@ -485,10 +681,7 @@ mod tests {
         assert!(verify(&proof, &[0b0110], &params).unwrap());
 
         let mut tampered = proof.clone();
-        tampered.repetitions[0].opened_views[0]
-            .view
-            .xor_bit_shares[0]
-            .bit_x[7] ^= 1;
+        tampered.repetitions[0].opened_views[0].view.xor_bit_shares[0].bit_x[7] ^= 1;
         let result = verify(&tampered, &[0b0110], &params);
         assert!(result.is_err(), "tampered Xor bit share must cause Err");
     }

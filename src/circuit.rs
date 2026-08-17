@@ -103,22 +103,46 @@ impl Circuit {
 
         for gate in &self.gates {
             match gate {
-                Gate::Add { left, right, output } => {
+                Gate::Add {
+                    left,
+                    right,
+                    output,
+                } => {
                     wires[*output] = wires[*left].wrapping_add(wires[*right]);
                 }
-                Gate::Mul { left, right, output } => {
+                Gate::Mul {
+                    left,
+                    right,
+                    output,
+                } => {
                     wires[*output] = wires[*left].wrapping_mul(wires[*right]);
                 }
-                Gate::Xor { left, right, output } => {
+                Gate::Xor {
+                    left,
+                    right,
+                    output,
+                } => {
                     wires[*output] = wires[*left] ^ wires[*right];
                 }
-                Gate::AddConst { input, constant, output } => {
+                Gate::AddConst {
+                    input,
+                    constant,
+                    output,
+                } => {
                     wires[*output] = wires[*input].wrapping_add(*constant);
                 }
-                Gate::MulConst { input, constant, output } => {
+                Gate::MulConst {
+                    input,
+                    constant,
+                    output,
+                } => {
                     wires[*output] = wires[*input].wrapping_mul(*constant);
                 }
-                Gate::AssertEq { input, expected, output } => {
+                Gate::AssertEq {
+                    input,
+                    expected,
+                    output,
+                } => {
                     wires[*output] = wires[*input];
                     if wires[*input] != *expected {
                         return Err(crate::MpcithError::CircuitError(format!(
@@ -141,6 +165,36 @@ impl Circuit {
     /// Number of multiplication (interactive) gates.
     pub fn num_mul_gates(&self) -> usize {
         self.gates.iter().filter(|g| g.is_interactive()).count()
+    }
+
+    /// Returns `(input_wire, expected)` for every `AssertEq` gate, in
+    /// circuit order. This lets the prover/verifier independently derive
+    /// which wire values are asserted equal to which public constants,
+    /// instead of trusting a value supplied solely by the prover.
+    pub fn assert_constraints(&self) -> Vec<(usize, u32)> {
+        self.gates
+            .iter()
+            .filter_map(|g| match g {
+                Gate::AssertEq {
+                    input, expected, ..
+                } => Some((*input, *expected)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// If `wire` is the output of some `AssertEq` gate, returns that gate's
+    /// `expected` constant. Used by the verifier to derive the expected
+    /// value of a circuit output wire directly from the (publicly hashed)
+    /// circuit, rather than trusting the prover-supplied
+    /// `Proof::expected_outputs` field.
+    pub fn assert_expected_for_output(&self, wire: usize) -> Option<u32> {
+        self.gates.iter().find_map(|g| match g {
+            Gate::AssertEq {
+                output, expected, ..
+            } if *output == wire => Some(*expected),
+            _ => None,
+        })
     }
 }
 
@@ -177,37 +231,61 @@ impl CircuitBuilder {
 
     pub fn add(&mut self, left: usize, right: usize) -> usize {
         let output = self.alloc();
-        self.gates.push(Gate::Add { left, right, output });
+        self.gates.push(Gate::Add {
+            left,
+            right,
+            output,
+        });
         output
     }
 
     pub fn mul(&mut self, left: usize, right: usize) -> usize {
         let output = self.alloc();
-        self.gates.push(Gate::Mul { left, right, output });
+        self.gates.push(Gate::Mul {
+            left,
+            right,
+            output,
+        });
         output
     }
 
     pub fn xor(&mut self, left: usize, right: usize) -> usize {
         let output = self.alloc();
-        self.gates.push(Gate::Xor { left, right, output });
+        self.gates.push(Gate::Xor {
+            left,
+            right,
+            output,
+        });
         output
     }
 
     pub fn add_const(&mut self, input: usize, constant: u32) -> usize {
         let output = self.alloc();
-        self.gates.push(Gate::AddConst { input, constant, output });
+        self.gates.push(Gate::AddConst {
+            input,
+            constant,
+            output,
+        });
         output
     }
 
     pub fn mul_const(&mut self, input: usize, constant: u32) -> usize {
         let output = self.alloc();
-        self.gates.push(Gate::MulConst { input, constant, output });
+        self.gates.push(Gate::MulConst {
+            input,
+            constant,
+            output,
+        });
         output
     }
 
     pub fn assert_eq(&mut self, input: usize, expected: u32) -> usize {
         let output = self.alloc();
-        self.gates.push(Gate::AssertEq { input, expected, output });
+        self.gates.push(Gate::AssertEq {
+            input,
+            expected,
+            output,
+        });
         output
     }
 
@@ -242,11 +320,7 @@ pub fn bit_decompose(
 /// Like [`bit_decompose`] but uses caller-provided wire indices for the bits
 /// instead of allocating new input wires.  Useful when all input wires must
 /// be allocated up-front (e.g. multiple decompositions in one circuit).
-pub fn bit_decompose_on(
-    builder: &mut CircuitBuilder,
-    input_wire: usize,
-    bit_wires: &[usize],
-) {
+pub fn bit_decompose_on(builder: &mut CircuitBuilder, input_wire: usize, bit_wires: &[usize]) {
     let bit_count = bit_wires.len();
     if bit_count == 0 {
         return;
@@ -280,8 +354,8 @@ mod tests {
     fn test_addition_circuit() {
         // Circuit: assert x + y == 7
         let mut builder = CircuitBuilder::new(2); // wires 0=x, 1=y
-        let sum = builder.add(0, 1);               // wire 2 = x + y
-        let _out = builder.assert_eq(sum, 7);       // wire 3, asserts == 7
+        let sum = builder.add(0, 1); // wire 2 = x + y
+        let _out = builder.assert_eq(sum, 7); // wire 3, asserts == 7
         let circuit = builder.build(1);
 
         let trace = circuit.evaluate(&[3, 4]).unwrap();
@@ -353,7 +427,10 @@ mod tests {
                 witness.push((value >> i) & 1);
             }
 
-            assert!(circuit.evaluate(&witness).is_ok(), "Failed for value {value}");
+            assert!(
+                circuit.evaluate(&witness).is_ok(),
+                "Failed for value {value}"
+            );
         }
     }
 }
