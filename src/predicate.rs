@@ -50,21 +50,13 @@ impl Predicate {
     /// Compile this predicate to an arithmetic circuit.
     pub fn compile(&self) -> crate::Result<CompiledPredicate> {
         match self {
-            Predicate::AdditionCheck { expected_sum } => {
-                compile_addition_check(*expected_sum)
-            }
+            Predicate::AdditionCheck { expected_sum } => compile_addition_check(*expected_sum),
             Predicate::MultiplicationCheck { expected_product } => {
                 compile_multiplication_check(*expected_product)
             }
-            Predicate::XorCheck { expected_xor } => {
-                compile_xor_check(*expected_xor)
-            }
-            Predicate::RangeCheck { lo, hi } => {
-                compile_range_check(*lo, *hi)
-            }
-            Predicate::SetMembership { members } => {
-                compile_set_membership(members)
-            }
+            Predicate::XorCheck { expected_xor } => compile_xor_check(*expected_xor),
+            Predicate::RangeCheck { lo, hi } => compile_range_check(*lo, *hi),
+            Predicate::SetMembership { members } => compile_set_membership(members),
         }
     }
 
@@ -75,15 +67,16 @@ impl Predicate {
     /// Other variants return an error (use `prove()` with an explicit witness).
     pub fn generate_witness(&self, secret_value: u32) -> crate::Result<Vec<u32>> {
         match self {
-            Predicate::RangeCheck { lo, hi } => {
-                Ok(range_witness_vec(secret_value, *lo, *hi))
-            }
+            Predicate::RangeCheck { lo, hi } => Ok(range_witness_vec(secret_value, *lo, *hi)),
             Predicate::SetMembership { members } => {
-                let idx = members.iter().position(|&m| m == secret_value).ok_or_else(|| {
-                    crate::MpcithError::InvalidWitness(format!(
-                        "Value {secret_value} is not in the member set"
-                    ))
-                })?;
+                let idx = members
+                    .iter()
+                    .position(|&m| m == secret_value)
+                    .ok_or_else(|| {
+                        crate::MpcithError::InvalidWitness(format!(
+                            "Value {secret_value} is not in the member set"
+                        ))
+                    })?;
                 let tree = MerkleTree::build(members);
                 let proof = tree.prove_membership(idx);
                 Ok(set_membership_witness_vec(&proof))
@@ -124,7 +117,12 @@ pub enum CompoundPredicate {
 ///
 /// The merged circuit uses layout: [left_inputs, right_inputs, left_intermediates, right_intermediates].
 /// Input wires (0..num_inputs) get `input_offset`; intermediate wires get `intermediate_offset`.
-fn remap_gate(gate: &Gate, num_inputs: usize, input_offset: usize, intermediate_offset: usize) -> Gate {
+fn remap_gate(
+    gate: &Gate,
+    num_inputs: usize,
+    input_offset: usize,
+    intermediate_offset: usize,
+) -> Gate {
     fn remap(idx: usize, num_inputs: usize, input_off: usize, inter_off: usize) -> usize {
         if idx < num_inputs {
             idx + input_off
@@ -133,32 +131,56 @@ fn remap_gate(gate: &Gate, num_inputs: usize, input_offset: usize, intermediate_
         }
     }
     match gate {
-        Gate::Add { left, right, output } => Gate::Add {
+        Gate::Add {
+            left,
+            right,
+            output,
+        } => Gate::Add {
             left: remap(*left, num_inputs, input_offset, intermediate_offset),
             right: remap(*right, num_inputs, input_offset, intermediate_offset),
             output: remap(*output, num_inputs, input_offset, intermediate_offset),
         },
-        Gate::Mul { left, right, output } => Gate::Mul {
+        Gate::Mul {
+            left,
+            right,
+            output,
+        } => Gate::Mul {
             left: remap(*left, num_inputs, input_offset, intermediate_offset),
             right: remap(*right, num_inputs, input_offset, intermediate_offset),
             output: remap(*output, num_inputs, input_offset, intermediate_offset),
         },
-        Gate::Xor { left, right, output } => Gate::Xor {
+        Gate::Xor {
+            left,
+            right,
+            output,
+        } => Gate::Xor {
             left: remap(*left, num_inputs, input_offset, intermediate_offset),
             right: remap(*right, num_inputs, input_offset, intermediate_offset),
             output: remap(*output, num_inputs, input_offset, intermediate_offset),
         },
-        Gate::AddConst { input, constant, output } => Gate::AddConst {
+        Gate::AddConst {
+            input,
+            constant,
+            output,
+        } => Gate::AddConst {
             input: remap(*input, num_inputs, input_offset, intermediate_offset),
             constant: *constant,
             output: remap(*output, num_inputs, input_offset, intermediate_offset),
         },
-        Gate::MulConst { input, constant, output } => Gate::MulConst {
+        Gate::MulConst {
+            input,
+            constant,
+            output,
+        } => Gate::MulConst {
             input: remap(*input, num_inputs, input_offset, intermediate_offset),
             constant: *constant,
             output: remap(*output, num_inputs, input_offset, intermediate_offset),
         },
-        Gate::AssertEq { input, expected, output } => Gate::AssertEq {
+        Gate::AssertEq {
+            input,
+            expected,
+            output,
+        } => Gate::AssertEq {
             input: remap(*input, num_inputs, input_offset, intermediate_offset),
             expected: *expected,
             output: remap(*output, num_inputs, input_offset, intermediate_offset),
@@ -190,8 +212,8 @@ impl CompoundPredicate {
                     gates.push(remap_gate(
                         gate,
                         c_left.num_inputs,
-                        0,                     // input_offset: left inputs stay at 0
-                        c_right.num_inputs,    // intermediate_offset: shift right by R
+                        0,                  // input_offset: left inputs stay at 0
+                        c_right.num_inputs, // intermediate_offset: shift right by R
                     ));
                 }
 
@@ -200,8 +222,8 @@ impl CompoundPredicate {
                     gates.push(remap_gate(
                         gate,
                         c_right.num_inputs,
-                        c_left.num_inputs,     // input_offset: right inputs start after left inputs
-                        c_left.num_wires,      // intermediate_offset: right intermediates after left's full space
+                        c_left.num_inputs, // input_offset: right inputs start after left inputs
+                        c_left.num_wires, // intermediate_offset: right intermediates after left's full space
                     ));
                 }
 
@@ -231,8 +253,56 @@ impl CompoundPredicate {
     pub fn range_and_membership(lo: u32, hi: u32, members: Vec<u32>) -> Self {
         CompoundPredicate::And(
             Box::new(CompoundPredicate::Single(Predicate::RangeCheck { lo, hi })),
-            Box::new(CompoundPredicate::Single(Predicate::SetMembership { members })),
+            Box::new(CompoundPredicate::Single(Predicate::SetMembership {
+                members,
+            })),
         )
+    }
+
+    /// Build the same compound circuit as `range_and_membership` from the
+    /// *public* fields available to the verifier (root + depth), WITHOUT
+    /// needing the full member set. Used by `verify_transaction_proof` to
+    /// independently derive the expected circuit hash and detect circuit
+    /// substitution attacks.
+    pub fn range_and_membership_for_verify(
+        lo: u32,
+        hi: u32,
+        root: u32,
+        depth: usize,
+    ) -> crate::Result<CompiledPredicate> {
+        let left = compile_range_check(lo, hi)?;
+        let right = compile_set_membership_from_root(root, depth)?;
+        // Merge identically to CompoundPredicate::And::compile().
+        let c_left = &left.circuit;
+        let c_right = &right.circuit;
+        let num_inputs = c_left.num_inputs + c_right.num_inputs;
+        let num_wires = c_left.num_wires + c_right.num_wires;
+        let num_outputs = c_left.num_outputs + c_right.num_outputs;
+        let mut gates = Vec::with_capacity(c_left.gates.len() + c_right.gates.len());
+        for gate in &c_left.gates {
+            gates.push(remap_gate(gate, c_left.num_inputs, 0, c_right.num_inputs));
+        }
+        for gate in &c_right.gates {
+            gates.push(remap_gate(
+                gate,
+                c_right.num_inputs,
+                c_left.num_inputs,
+                c_left.num_wires,
+            ));
+        }
+        let circuit = Circuit {
+            num_wires,
+            num_inputs,
+            num_outputs,
+            gates,
+        };
+        let mut public_inputs = left.public_inputs;
+        public_inputs.extend_from_slice(&right.public_inputs);
+        Ok(CompiledPredicate {
+            circuit,
+            public_inputs,
+            witness_size: left.witness_size + right.witness_size,
+        })
     }
 }
 
@@ -426,6 +496,57 @@ fn compile_set_membership(members: &[u32]) -> crate::Result<CompiledPredicate> {
     })
 }
 
+/// Like [`compile_set_membership`] but takes the Merkle `root` and tree
+/// `depth` directly instead of the full member list. This lets the verifier
+/// independently reconstruct the exact same circuit (and hence its hash)
+/// from the public statement alone, without ever seeing the private members.
+fn compile_set_membership_from_root(root: u32, depth: usize) -> crate::Result<CompiledPredicate> {
+    if depth == 0 {
+        return Err(crate::MpcithError::InvalidParams(
+            "Set membership depth must be at least 1".into(),
+        ));
+    }
+    let total_inputs = 2 + 2 * depth;
+    let mut builder = CircuitBuilder::new(total_inputs);
+
+    let bit_wires: Vec<usize> = (2..2 + depth).collect();
+    let sibling_wires: Vec<usize> = (2 + depth..2 + 2 * depth).collect();
+
+    bit_decompose_on(&mut builder, 1, &bit_wires);
+
+    let mut current = 0usize;
+    for i in 0..depth {
+        let bit = bit_wires[i];
+        let sibling = sibling_wires[i];
+        let not_bit = {
+            let t = builder.mul_const(bit, u32::MAX);
+            builder.add_const(t, 1)
+        };
+        let selected_left = {
+            let a = builder.mul(not_bit, current);
+            let b = builder.mul(bit, sibling);
+            builder.add(a, b)
+        };
+        let selected_right = {
+            let a = builder.mul(bit, current);
+            let b = builder.mul(not_bit, sibling);
+            builder.add(a, b)
+        };
+        let (hash_left, _hash_right) =
+            build_mimc_hash(&mut builder, selected_left, selected_right, MIMC_ROUNDS);
+        current = hash_left;
+    }
+
+    let _out = builder.assert_eq(current, root);
+    let circuit = builder.build(1);
+
+    Ok(CompiledPredicate {
+        circuit,
+        public_inputs: vec![root],
+        witness_size: 2 + depth,
+    })
+}
+
 /// Helper: build the full RangeCheck witness for value x in [lo, hi].
 fn range_witness_vec(x: u32, lo: u32, hi: u32) -> Vec<u32> {
     let width = hi.wrapping_sub(lo);
@@ -491,7 +612,9 @@ mod tests {
 
     #[test]
     fn test_multiplication_predicate() {
-        let pred = Predicate::MultiplicationCheck { expected_product: 12 };
+        let pred = Predicate::MultiplicationCheck {
+            expected_product: 12,
+        };
         let compiled = pred.compile().unwrap();
         compiled.circuit.evaluate(&[3, 4]).unwrap();
         assert!(compiled.circuit.evaluate(&[3, 5]).is_err());

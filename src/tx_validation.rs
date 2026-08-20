@@ -15,11 +15,12 @@
 
 use sha3::{Digest, Sha3_256};
 
+use crate::fiat_shamir::hash_circuit;
 use crate::merkle::MerkleProof;
 use crate::params::ProofParams;
 use crate::predicate::CompoundPredicate;
 use crate::proof::{self, Proof};
-use crate::Result;
+use crate::{MpcithError, Result};
 
 // ─── Data structures ──────────────────────────────────────────────────────────
 
@@ -113,8 +114,7 @@ pub fn create_transaction_proof(
     let (lo, hi) = statement.amount_range;
 
     // Build the compound predicate.
-    let predicate =
-        CompoundPredicate::range_and_membership(lo, hi, statement.members.clone());
+    let predicate = CompoundPredicate::range_and_membership(lo, hi, statement.members.clone());
 
     // Generate the full witness vector: range_witness ++ membership_witness.
     let full_witness = predicate.generate_witness(witness.secret_value)?;
@@ -128,14 +128,46 @@ pub fn create_transaction_proof(
 /// Verify a transaction proof against a statement.
 ///
 /// Reconstructs the public-inputs encoding from the statement (including the
-/// context hash) and calls the standard `verify()`.  The proof's embedded
-/// circuit already contains the Merkle root, so the verifier does NOT need
-/// the full member list.
+/// context hash), independently recompiles the expected
+/// `RangeCheck ∧ SetMembership` circuit from the statement's public fields
+/// (`amount_range`, `authorized_set_root`, `merkle_depth`) and checks that
+/// the proof's circuit hash matches before delegating to `proof::verify()`.
+///
+/// This check is critical: without it a malicious prover can submit a trivial
+/// always-true circuit while claiming the correct `public_inputs`, bypassing
+/// the range and membership constraints entirely.
+///
+/// The `members` field of the statement is NOT used here — the verifier only
+/// needs the Merkle root and tree depth, both of which are already part of
+/// the public statement.
 pub fn verify_transaction_proof(
     proof: &Proof,
     statement: &TransactionStatement,
     params: &ProofParams,
 ) -> Result<bool> {
+    let (lo, hi) = statement.amount_range;
+
+    // Independently compile the expected circuit from the public statement
+    // (no member list needed — only the root and depth are required).
+    let expected_compiled = CompoundPredicate::range_and_membership_for_verify(
+        lo,
+        hi,
+        statement.authorized_set_root,
+        statement.merkle_depth,
+    )?;
+    let expected_hash = hash_circuit(&expected_compiled.circuit);
+
+    // Reject the proof if its circuit does not match the one implied by the
+    // public statement.  Without this check a prover could substitute any
+    // trivially-satisfiable circuit while keeping public_inputs correct.
+    if proof.circuit_hash != expected_hash {
+        return Err(MpcithError::VerificationFailed(
+            "Proof circuit does not match the circuit implied by the transaction statement. \
+             Possible circuit-substitution attack."
+                .into(),
+        ));
+    }
+
     let public_inputs = encode_public_inputs(statement);
     proof::verify(proof, &public_inputs, params)
 }

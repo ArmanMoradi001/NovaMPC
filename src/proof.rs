@@ -7,7 +7,7 @@ use crate::{
     fiat_shamir::{derive_challenges, hash_circuit},
     mpc::{
         recompute_linear_shares, run_mpc_emulation, verify_party_view, MpcExecution,
-        OpenedNeighbor, PartyView, XorGateAux,
+        OpenedNeighbor, PartyView,
     },
     params::ProofParams,
     predicate::{CompiledPredicate, CompoundPredicate, Predicate},
@@ -408,8 +408,6 @@ pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Res
         // use them directly — this preserves tamper-detection semantics.
         // Otherwise fall back to recompute_linear_shares.
         let mut all_wire_shares: Vec<Vec<u32>> = Vec::with_capacity(rep_proof.opened_views.len());
-        let mut all_xor_bit_shares: Vec<&[XorGateAux]> =
-            Vec::with_capacity(rep_proof.opened_views.len());
         for opened in &rep_proof.opened_views {
             let p = opened.view.party_idx;
             let ws = if !opened.view.wire_shares.is_empty() {
@@ -423,10 +421,9 @@ pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Res
                     num_parties,
                     &opened.view.mul_output_shares,
                     &opened.view.residual_input_shares,
-                )
+                )?
             };
             all_wire_shares.push(ws);
-            all_xor_bit_shares.push(opened.view.xor_bit_shares.as_slice());
         }
 
         // Verify commitments and view consistency for all opened views.
@@ -481,7 +478,6 @@ pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Res
                 Some(OpenedNeighbor {
                     seed: &reconstructed_seeds[next],
                     wire_shares: all_wire_shares[next_idx].as_slice(),
-                    xor_bit_shares: all_xor_bit_shares[next_idx],
                 })
             } else {
                 None
@@ -492,7 +488,6 @@ pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Res
                 &all_wire_shares[idx],
                 p,
                 reconstructed_seed,
-                &opened.view.xor_bit_shares,
                 next_opened,
             )?;
 
@@ -659,31 +654,20 @@ mod tests {
     #[test]
     fn test_prove_verify_xor() {
         let params = fast_params();
-        let pred = Predicate::XorCheck {
-            expected_xor: 0b1010 ^ 0b1100,
-        };
-        let proof = prove(pred, &[0b1010, 0b1100], &[0b0110], &params).unwrap();
-        assert!(verify(&proof, &[0b0110], &params).unwrap());
-    }
-
-    #[test]
-    fn test_xor_bit_tampering_rejected_by_verify() {
-        // End-to-end: a witness with an XOR gate proves and verifies, but
-        // flipping a single bit share inside an opened party's view now makes
-        // verify() reject.  Before the bit-decomposition fix the XOR output
-        // share was never checked, so a proof whose XOR data was tampered with
-        // could still pass as long as the commitments matched.
-        let params = fast_params();
-        let pred = Predicate::XorCheck {
-            expected_xor: 0b1010 ^ 0b1100,
-        };
-        let proof = prove(pred, &[0b1010, 0b1100], &[0b0110], &params).unwrap();
-        assert!(verify(&proof, &[0b0110], &params).unwrap());
-
-        let mut tampered = proof.clone();
-        tampered.repetitions[0].opened_views[0].view.xor_bit_shares[0].bit_x[7] ^= 1;
-        let result = verify(&tampered, &[0b0110], &params);
-        assert!(result.is_err(), "tampered Xor bit share must cause Err");
+        let x = 0b1010u32;
+        let y = 0b1100u32;
+        let pred = Predicate::XorCheck { expected_xor: x ^ y };
+        // CircuitBuilder::xor() expands XOR into bit-decomposition gates, so the
+        // witness must be [x, y] followed by the 32 bits of x and the 32 bits of y.
+        let mut witness = vec![x, y];
+        for i in 0..32 {
+            witness.push((x >> i) & 1);
+        }
+        for i in 0..32 {
+            witness.push((y >> i) & 1);
+        }
+        let proof = prove(pred, &witness, &[x ^ y], &params).unwrap();
+        assert!(verify(&proof, &[x ^ y], &params).unwrap());
     }
 
     #[test]

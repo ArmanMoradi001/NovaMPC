@@ -249,14 +249,41 @@ impl CircuitBuilder {
         output
     }
 
+    /// Compute `left XOR right` (bitwise, 32-bit) as arithmetic circuit gates.
+    ///
+    /// Uses the identity XOR(a,b) = Σ_i (a_i + b_i - 2·(a_i·b_i))·2^i
+    /// where a_i, b_i are the i-th bits of a and b.  The bit decomposition
+    /// allocates 64 fresh input wires (32 bits of `left`, 32 of `right`) and
+    /// emits `bit_decompose_on` gates to enforce boolean + reconstruction
+    /// constraints.  The caller's witness must therefore include those 64
+    /// bit values immediately after any existing inputs.
+    ///
+    /// This never emits `Gate::Xor` — all constraints are standard
+    /// Mul/Add/MulConst/AssertEq gates verified by the MPC protocol.
     pub fn xor(&mut self, left: usize, right: usize) -> usize {
-        let output = self.alloc();
-        self.gates.push(Gate::Xor {
-            left,
-            right,
-            output,
-        });
-        output
+        // Allocate bit witnesses for `left` and `right`.
+        let left_bits: Vec<usize> = (0..32).map(|_| self.add_input()).collect();
+        let right_bits: Vec<usize> = (0..32).map(|_| self.add_input()).collect();
+        bit_decompose_on(self, left, &left_bits);
+        bit_decompose_on(self, right, &right_bits);
+
+        // Compute XOR bit by bit: xor_i = a_i + b_i - 2*(a_i*b_i)
+        // and accumulate the weighted sum: Σ xor_i * 2^i.
+        // Bit 0 has weight 1 (no MulConst needed).
+        let and_0 = self.mul(left_bits[0], right_bits[0]);
+        let neg_two_and_0 = self.mul_const(and_0, 0xFFFFFFFEu32); // -2 mod 2^32
+        let sum_0 = self.add(left_bits[0], right_bits[0]);
+        let mut xor_result = self.add(sum_0, neg_two_and_0);
+
+        for i in 1..32 {
+            let and_i = self.mul(left_bits[i], right_bits[i]);
+            let neg_two_and_i = self.mul_const(and_i, 0xFFFFFFFEu32);
+            let sum_i = self.add(left_bits[i], right_bits[i]);
+            let xor_bit_i = self.add(sum_i, neg_two_and_i);
+            let weighted = self.mul_const(xor_bit_i, 1u32 << i);
+            xor_result = self.add(xor_result, weighted);
+        }
+        xor_result
     }
 
     pub fn add_const(&mut self, input: usize, constant: u32) -> usize {
@@ -340,9 +367,12 @@ pub fn bit_decompose_on(builder: &mut CircuitBuilder, input_wire: usize, bit_wir
         sum = builder.add(sum, weighted);
     }
 
-    // Assert sum == input_wire.
-    // XOR(a, a) == 0, so xor(sum, input_wire) should be 0 when equal.
-    let diff = builder.xor(sum, input_wire);
+    // Assert sum == input_wire using pure arithmetic: (sum - input_wire) == 0.
+    // mul_const(w, u32::MAX) computes -w mod 2^32 (since u32::MAX = -1 mod 2^32).
+    // This avoids a Gate::Xor here, keeping reconstruction fully linear and
+    // correctly enforced via the assert_shares mechanism in proof::verify().
+    let neg_input = builder.mul_const(input_wire, u32::MAX);
+    let diff = builder.add(sum, neg_input);
     builder.assert_eq(diff, 0);
 }
 
