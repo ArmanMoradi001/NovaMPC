@@ -297,6 +297,19 @@ fn prove_compiled(
 
 // ─── Proof verification ───────────────────────────────────────────────────────
 
+/// Verify a proof against the given public inputs.
+///
+/// **Warning:** this function does **not** verify that `proof.circuit` matches
+/// any particular predicate — it only checks that `proof.circuit_hash` matches
+/// the circuit embedded in the proof.  A malicious prover can embed a
+/// trivially-satisfiable circuit in `Proof.circuit` and this function will
+/// accept it, since nothing ties the circuit back to the predicate the caller
+/// actually intended to check.
+///
+/// Prefer [`verify_predicate`] or [`verify_compound`] for application-level
+/// verification, or perform your own circuit-hash check against the expected
+/// compiled circuit (as `tx_validation::verify_transaction_proof` does) before
+/// calling this function.
 pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Result<bool> {
     params.validate()?;
 
@@ -559,6 +572,64 @@ pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Res
     Ok(true)
 }
 
+/// Verify a proof against a specific predicate, guarding against
+/// circuit-substitution attacks.
+///
+/// Independently recompiles `predicate` to obtain the expected circuit,
+/// hashes it (using the same `hash_circuit` used by [`verify`] internally),
+/// and compares against `proof.circuit_hash`.  If they differ, returns a
+/// [`MpcithError::VerificationFailed`] indicating a possible
+/// circuit-substitution attack, mirroring
+/// `tx_validation::verify_transaction_proof`.  Only delegates to [`verify`]
+/// when the hashes match.
+pub fn verify_predicate(
+    predicate: &Predicate,
+    proof: &Proof,
+    public_inputs: &[u32],
+    params: &ProofParams,
+) -> Result<bool> {
+    let compiled = predicate.compile()?;
+    let expected_hash = hash_circuit(&compiled.circuit);
+
+    if proof.circuit_hash != expected_hash {
+        return Err(MpcithError::VerificationFailed(
+            "Proof circuit does not match the predicate — possible circuit-substitution attack"
+                .into(),
+        ));
+    }
+
+    verify(proof, public_inputs, params)
+}
+
+/// Verify a proof against a specific compound predicate, guarding against
+/// circuit-substitution attacks.
+///
+/// Independently recompiles `compound` to obtain the expected circuit,
+/// hashes it (using the same `hash_circuit` used by [`verify`] internally),
+/// and compares against `proof.circuit_hash`.  If they differ, returns a
+/// [`MpcithError::VerificationFailed`] indicating a possible
+/// circuit-substitution attack, mirroring
+/// `tx_validation::verify_transaction_proof`.  Only delegates to [`verify`]
+/// when the hashes match.
+pub fn verify_compound(
+    compound: &CompoundPredicate,
+    proof: &Proof,
+    public_inputs: &[u32],
+    params: &ProofParams,
+) -> Result<bool> {
+    let compiled = compound.compile()?;
+    let expected_hash = hash_circuit(&compiled.circuit);
+
+    if proof.circuit_hash != expected_hash {
+        return Err(MpcithError::VerificationFailed(
+            "Proof circuit does not match the compound predicate — possible circuit-substitution attack"
+                .into(),
+        ));
+    }
+
+    verify(proof, public_inputs, params)
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -577,6 +648,47 @@ mod tests {
         let pred = Predicate::AdditionCheck { expected_sum: 7 };
         let proof = prove(pred, &[3, 4], &[7], &params).unwrap();
         assert!(verify(&proof, &[7], &params).unwrap());
+    }
+
+    #[test]
+    fn test_verify_predicate_roundtrip() {
+        let params = fast_params();
+        let pred = Predicate::AdditionCheck { expected_sum: 7 };
+        let proof = prove(pred.clone(), &[3, 4], &[7], &params).unwrap();
+        assert!(verify_predicate(&pred, &proof, &[7], &params).unwrap());
+    }
+
+    #[test]
+    fn test_verify_predicate_rejects_circuit_substitution() {
+        let params = fast_params();
+        let pred = Predicate::AdditionCheck { expected_sum: 7 };
+        let proof = prove(pred.clone(), &[3, 4], &[7], &params).unwrap();
+
+        // Malicious prover swaps in a different, trivially-true circuit and
+        // rebinds circuit_hash to it so `verify` would accept it; only
+        // verify_predicate's predicate-binding check can catch this.
+        let mut builder = crate::circuit::CircuitBuilder::new(2);
+        builder.assert_eq(0, 0);
+        let trivial_circuit = builder.build(1);
+
+        let mut forged = proof;
+        forged.circuit = trivial_circuit.clone();
+        forged.circuit_hash = crate::fiat_shamir::hash_circuit(&trivial_circuit);
+        forged.num_circuit_wires = trivial_circuit.num_wires;
+        forged.num_circuit_outputs = trivial_circuit.num_outputs;
+
+        let result = verify_predicate(&pred, &forged, &[7], &params);
+        assert!(result.is_err(), "substituted circuit must be rejected");
+        let err = result.unwrap_err();
+        match err {
+            crate::MpcithError::VerificationFailed(msg) => {
+                assert!(
+                    msg.contains("circuit-substitution"),
+                    "error should mention circuit-substitution, got: {msg}"
+                );
+            }
+            other => panic!("expected VerificationFailed, got {other:?}"),
+        }
     }
 
     #[test]
