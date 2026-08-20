@@ -337,8 +337,8 @@ fn compile_multiplication_check(expected_product: u32) -> crate::Result<Compiled
 
 /// Circuit: assert witness[0] XOR witness[1] == expected_xor
 fn compile_xor_check(expected_xor: u32) -> crate::Result<CompiledPredicate> {
-    let mut builder = CircuitBuilder::new(2);
-    let xor_wire = builder.xor(0, 1);
+    let mut builder = CircuitBuilder::new_with_reserved_xor_inputs(2, 1);
+    let xor_wire = builder.xor(0, 1)?;
     let _out = builder.assert_eq(xor_wire, expected_xor);
     let circuit = builder.build(1);
 

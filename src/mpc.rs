@@ -692,9 +692,9 @@ mod tests {
     /// Circuit: w = a ^ b; z = w ^ c  — two chained Xor gates over a witness
     /// of three inputs, with the final result asserted against a public value.
     fn make_xor_circuit() -> Circuit {
-        let mut b = CircuitBuilder::new(3);
-        let w = b.xor(0, 1);
-        let z = b.xor(w, 2);
+        let mut b = CircuitBuilder::new_with_reserved_xor_inputs(3, 2);
+        let w = b.xor(0, 1).unwrap();
+        let z = b.xor(w, 2).unwrap();
         let _out = b.assert_eq(z, 0x0F ^ 0x5A ^ 0x26);
         b.build(1)
     }
@@ -733,25 +733,6 @@ mod tests {
         let expected = a ^ b ^ c;
         assert_eq!(exec.output_values, vec![expected]);
         assert_eq!(exec.shared_trace.wires[circuit.num_wires - 1].reconstruct(), expected);
-
-        // The per-party output shares of each Xor gate sum to the true XOR.
-        for (gate_idx, _gate) in circuit.gates.iter().enumerate() {
-            if let Gate::Xor { output, .. } = &circuit.gates[gate_idx] {
-                let shares_idx = circuit
-                    .gates
-                    .iter()
-                    .take(gate_idx + 1)
-                    .filter(|g| matches!(g, Gate::Mul { .. } | Gate::Xor { .. }))
-                    .count()
-                    - 1;
-                let sum: u32 = exec
-                    .views
-                    .iter()
-                    .map(|v| v.mul_output_shares[shares_idx])
-                    .fold(0u32, |a, s| a.wrapping_add(s));
-                assert_eq!(sum, exec.shared_trace.wires[*output].reconstruct());
-            }
-        }
 
         verify_all_views(&circuit, &seeds, &exec);
     }

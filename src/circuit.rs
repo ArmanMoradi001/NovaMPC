@@ -9,6 +9,7 @@
 //! each MPC party holds a share of.
 
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 
 /// A single gate in the arithmetic circuit.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -204,6 +205,12 @@ pub struct CircuitBuilder {
     num_inputs: usize,
     next_wire: usize,
     gates: Vec<Gate>,
+    /// Queue of pre-allocated-but-unused XOR bit-wire slots.  Each slot is
+    /// 64 wires: 32 for the left operand's bits, 32 for the right operand's
+    /// bits.  Populated by [`Self::new_with_reserved_xor_inputs`] so that all
+    /// input wires stay contiguous at indices `0..num_inputs` (never
+    /// interleaved with intermediate wires).
+    xor_bit_pool: VecDeque<usize>,
 }
 
 impl CircuitBuilder {
@@ -212,6 +219,24 @@ impl CircuitBuilder {
             num_inputs,
             next_wire: num_inputs,
             gates: Vec::new(),
+            xor_bit_pool: VecDeque::new(),
+        }
+    }
+
+    /// Like [`Self::new`], but additionally pre-allocates `num_xor_calls`
+    /// slots of 64 input wires each for use by [`Self::xor`].  The caller
+    /// must reserve enough slots to cover every `.xor()` call it makes,
+    /// including chained ones (`a.xor(b)` then `result.xor(c)` is two calls).
+    /// The witness layout stays contiguous: `num_inputs` originals, then the
+    /// 64 bit wires of each reserved slot in the order the `.xor()` calls
+    /// consume them (left bits, then right bits, per call).
+    pub fn new_with_reserved_xor_inputs(num_inputs: usize, num_xor_calls: usize) -> Self {
+        let total_inputs = num_inputs + 64 * num_xor_calls;
+        Self {
+            num_inputs: total_inputs,
+            next_wire: total_inputs,
+            gates: Vec::new(),
+            xor_bit_pool: (num_inputs..num_inputs + 64 * num_xor_calls).collect(),
         }
     }
 
@@ -252,18 +277,28 @@ impl CircuitBuilder {
     /// Compute `left XOR right` (bitwise, 32-bit) as arithmetic circuit gates.
     ///
     /// Uses the identity XOR(a,b) = Σ_i (a_i + b_i - 2·(a_i·b_i))·2^i
-    /// where a_i, b_i are the i-th bits of a and b.  The bit decomposition
-    /// allocates 64 fresh input wires (32 bits of `left`, 32 of `right`) and
-    /// emits `bit_decompose_on` gates to enforce boolean + reconstruction
-    /// constraints.  The caller's witness must therefore include those 64
-    /// bit values immediately after any existing inputs.
+    /// where a_i, b_i are the i-th bits of a and b.  The 64 bit wires (32 bits
+    /// of `left`, 32 of `right`) come from the pre-allocated pool set up by
+    /// [`Self::new_with_reserved_xor_inputs`]; `bit_decompose_on` gates
+    /// enforce boolean + reconstruction constraints on them.
     ///
     /// This never emits `Gate::Xor` — all constraints are standard
     /// Mul/Add/MulConst/AssertEq gates verified by the MPC protocol.
-    pub fn xor(&mut self, left: usize, right: usize) -> usize {
-        // Allocate bit witnesses for `left` and `right`.
-        let left_bits: Vec<usize> = (0..32).map(|_| self.add_input()).collect();
-        let right_bits: Vec<usize> = (0..32).map(|_| self.add_input()).collect();
+    ///
+    /// Returns an error if the builder was not constructed with a reserved
+    /// slot for this call.
+    pub fn xor(&mut self, left: usize, right: usize) -> crate::Result<usize> {
+        // Consume one 64-wire slot (left bits, then right bits) from the pool.
+        if self.xor_bit_pool.len() < 64 {
+            return Err(crate::MpcithError::CircuitError(
+                "not enough reserved XOR input slots; construct the builder with \
+                 new_with_reserved_xor_inputs and count every .xor() call including \
+                 chained ones"
+                    .to_string(),
+            ));
+        }
+        let left_bits: Vec<usize> = (0..32).map(|_| self.xor_bit_pool.pop_front().unwrap()).collect();
+        let right_bits: Vec<usize> = (0..32).map(|_| self.xor_bit_pool.pop_front().unwrap()).collect();
         bit_decompose_on(self, left, &left_bits);
         bit_decompose_on(self, right, &right_bits);
 
@@ -283,7 +318,7 @@ impl CircuitBuilder {
             let weighted = self.mul_const(xor_bit_i, 1u32 << i);
             xor_result = self.add(xor_result, weighted);
         }
-        xor_result
+        Ok(xor_result)
     }
 
     pub fn add_const(&mut self, input: usize, constant: u32) -> usize {
@@ -462,5 +497,48 @@ mod tests {
                 "Failed for value {value}"
             );
         }
+    }
+
+    #[test]
+    fn test_chained_xor_reserved_inputs() {
+        // Regression test: two chained .xor() calls on the same builder must
+        // keep all input wires contiguous.  Before new_with_reserved_xor_inputs,
+        // xor() called add_input() mid-build, interleaving input wires with
+        // intermediate wires so the witness no longer mapped onto inputs and
+        // the circuit silently computed wrong results.
+        let mut builder = CircuitBuilder::new_with_reserved_xor_inputs(3, 2);
+        let w = builder.xor(0, 1).unwrap();
+        let z = builder.xor(w, 2).unwrap();
+        let _out = builder.assert_eq(z, 0x0F ^ 0x5A ^ 0x26);
+        let circuit = builder.build(1);
+
+        let a = 0x0Fu32;
+        let b = 0x5Au32;
+        let c = 0x26u32;
+        let mut witness = vec![a, b, c];
+        for i in 0..32 {
+            witness.push((a >> i) & 1);
+        }
+        for i in 0..32 {
+            witness.push((b >> i) & 1);
+        }
+        for i in 0..32 {
+            witness.push(((a ^ b) >> i) & 1);
+        }
+        for i in 0..32 {
+            witness.push((c >> i) & 1);
+        }
+
+        let trace = circuit.evaluate(&witness).unwrap();
+        assert_eq!(trace[z], a ^ b ^ c);
+        assert_eq!(circuit.outputs(&trace), &[a ^ b ^ c]);
+    }
+
+    #[test]
+    fn test_xor_missing_reserved_slot_errors() {
+        // Constructed with new() (no reserved slots), xor() must error loudly
+        // rather than silently fall back to interleaved add_input() allocation.
+        let mut builder = CircuitBuilder::new(2);
+        assert!(builder.xor(0, 1).is_err());
     }
 }
