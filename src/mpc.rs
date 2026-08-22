@@ -100,10 +100,6 @@ pub struct PartyView {
     /// other parties.  The verifier uses these to rebuild the residual party's
     /// input wires instead of drawing them from its seed RNG.
     pub residual_input_shares: Vec<u32>,
-    /// Full wire shares — kept for in-memory use and tamper detection but
-    /// NOT serialized (the verifier recomputes them from the seed).
-    #[serde(skip)]
-    pub wire_shares: Vec<u32>,
 }
 
 impl PartyView {
@@ -281,7 +277,6 @@ pub fn run_mpc_emulation(
                 seed: party_seeds[p].0,
                 mul_output_shares,
                 residual_input_shares,
-                wire_shares: shared_trace.party_view(p),
             }
         })
         .collect();

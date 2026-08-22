@@ -154,11 +154,6 @@ impl SharedTrace {
         }
     }
 
-    /// Party p's complete view of the trace (all their shares).
-    pub fn party_view(&self, party: usize) -> Vec<u32> {
-        self.wires.iter().map(|s| s.shares[party]).collect()
-    }
-
     /// Reconstruct a single wire value.
     pub fn reconstruct_wire(&self, wire: usize) -> u32 {
         self.wires[wire].reconstruct()

@@ -173,7 +173,8 @@ fn test_proof_sizes_table() {
 
 #[test]
 fn test_serialized_roundtrip_mul_heavy_predicates() {
-    // The deserialized path drops `wire_shares`, so the verifier must rebuild
+    // The deserialized proof contains only committed/transmitted data, so the
+    // verifier must rebuild
     // the residual party's inputs from the transmitted `residual_input_shares`
     // and every Mul share from the seed-derived ZKBoo formula.  RangeCheck and
     // SetMembership contain many Mul (and Xor) gates, so this exercises the
@@ -309,14 +310,17 @@ fn test_tampered_auth_path_rejected() {
 #[test]
 fn test_tampered_opened_view_rejected() {
     let mut proof = make_addition_proof();
-    // Flip the output wire share — this is checked during reconstruction.
+    // Tamper a transmitted per-party output share. The verifier cross-checks
+    // every revealed output share against the opened party's own committed
+    // view (recomputed from its seed), so a forged value must be rejected.
     // AdditionCheck: num_wires=4, num_outputs=1, output_start=3.
-    let output_wire = proof.num_circuit_wires - proof.num_circuit_outputs;
-    proof.repetitions[0].opened_views[0].view.wire_shares[output_wire] ^= 0xFF;
+    // Note: this circuit has no Mul/Xor gates, so every view's
+    // mul_output_shares is empty — output_shares is the relevant target.
+    proof.repetitions[0].output_shares[0][0] ^= 0xFF;
     let result = verify(&proof, &[7], &ProofParams::fast_insecure());
     assert!(
         result.is_err(),
-        "tampered output wire share must cause Err, not Ok(false)"
+        "tampered output share must cause Err, not Ok(false)"
     );
 }
 
@@ -337,10 +341,22 @@ fn test_tampered_hidden_party_rejected() {
 #[test]
 fn test_tampered_intermediate_wire_rejected() {
     let mut proof = make_addition_proof();
-    // Flip a NON-output wire share (wire 0 = witness input x).
-    // AdditionCheck: num_wires=4, num_outputs=1, output_start=3.
-    // Wire 0 is an input wire — not an output, so this was previously undetected.
-    proof.repetitions[0].opened_views[0].view.wire_shares[0] ^= 0xFF;
+    // Flip a residual input share (wire 0 = witness input x) of an opened
+    // view belonging to the residual party (index N-1), whose input shares
+    // are transmitted because they cannot be re-derived from its seed. The
+    // tampered value no longer matches the party's committed view, so the
+    // Merkle commitment check — and, failing that, the recomputed linear
+    // shares fed to verify_party_view — must reject it.
+    let num_parties = proof.repetitions[0].opened_views.len() + 1;
+    let target = proof
+        .repetitions
+        .iter_mut()
+        .flat_map(|rep| rep.opened_views.iter_mut())
+        .find(|opened| {
+            opened.view.party_idx == num_parties - 1 && !opened.view.residual_input_shares.is_empty()
+        })
+        .expect("proof must contain at least one opened residual-party view");
+    target.view.residual_input_shares[0] ^= 0xFF;
     let result = verify(&proof, &[7], &ProofParams::fast_insecure());
     assert!(
         result.is_err(),

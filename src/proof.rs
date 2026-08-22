@@ -416,26 +416,21 @@ pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Res
             num_parties,
         );
 
-        // Precompute wire_shares for all opened views.
-        // If the in-memory wire_shares are populated (not deserialized),
-        // use them directly — this preserves tamper-detection semantics.
-        // Otherwise fall back to recompute_linear_shares.
+        // Precompute wire_shares for all opened views, always derived from the
+        // reconstructed seed.  `wire_shares` is not part of any commitment, so
+        // a pre-populated value can never be trusted here.
         let mut all_wire_shares: Vec<Vec<u32>> = Vec::with_capacity(rep_proof.opened_views.len());
         for opened in &rep_proof.opened_views {
             let p = opened.view.party_idx;
-            let ws = if !opened.view.wire_shares.is_empty() {
-                opened.view.wire_shares.clone()
-            } else {
-                let reconstructed_seed = &reconstructed_seeds[p];
-                recompute_linear_shares(
-                    &proof.circuit,
-                    reconstructed_seed,
-                    p,
-                    num_parties,
-                    &opened.view.mul_output_shares,
-                    &opened.view.residual_input_shares,
-                )?
-            };
+            let reconstructed_seed = &reconstructed_seeds[p];
+            let ws = recompute_linear_shares(
+                &proof.circuit,
+                reconstructed_seed,
+                p,
+                num_parties,
+                &opened.view.mul_output_shares,
+                &opened.view.residual_input_shares,
+            )?;
             all_wire_shares.push(ws);
         }
 
@@ -809,11 +804,11 @@ mod tests {
 
     #[test]
     fn test_serialized_proof_roundtrip() {
-        // Prove in-memory, then serialize/deserialize so `wire_shares` is
-        // dropped and the verifier must rebuild every opened party's shares
-        // from the seed tree co-path, the transmitted residual-input shares
-        // (last party) and the committed Mul output shares.  This exercises
-        // the real networked-verification path, including the ZKBoo Mul check.
+        // Prove, then serialize/deserialize so the verifier must rebuild
+        // every opened party's shares from the seed tree co-path, the
+        // transmitted residual-input shares (last party) and the committed
+        // Mul output shares.  This exercises the real
+        // networked-verification path, including the ZKBoo Mul check.
         let params = fast_params();
 
         let mul_pred = Predicate::MultiplicationCheck {
