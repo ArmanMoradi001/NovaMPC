@@ -375,8 +375,21 @@ fn compile_range_check(lo: u32, hi: u32) -> crate::Result<CompiledPredicate> {
         ));
     }
 
+    // Soundness guard (audit finding C-2): the construction proves
+    // `0 <= shifted < 2^k` and `0 <= slack < 2^k` with
+    // `k = bits_needed(width)`. When `width >= 2^31`, `k = 32`, and a 32-bit
+    // boolean decomposition is satisfiable by EVERY u32 — the range
+    // constraint degenerates to `shifted + slack == width (mod 2^32)`,
+    // which any out-of-range `x` can satisfy via `slack = width - shifted`.
+    // Restrict the supported domain to `width < 2^31` (k <= 31), for which
+    // the construction is provably sound (no aliasing slack value exists).
     let width = hi.wrapping_sub(lo);
-    let k = bits_needed(width);
+    if width >= 1u32 << 31 {
+        return Err(crate::MpcithError::InvalidParams(format!(
+            "RangeCheck requires hi - lo < 2^31 (got width {width}); \
+             wider ranges make the bit-decomposition range proof vacuous"
+        )));
+    }    let k = bits_needed(width);
 
     // Pre-allocate ALL input wires so they sit contiguously at the start.
     // Layout: [x, x_bits(32), shifted_bits(k), slack_bits(k)]
@@ -809,5 +822,121 @@ mod tests {
         full_witness.extend_from_slice(&sm_witness);
 
         assert!(compiled.circuit.evaluate(&full_witness).is_err());
+    }
+
+    // ── C-2 regression: supported RangeCheck domain is hi - lo < 2^31 ─────
+
+    fn range_compile(lo: u32, hi: u32) -> crate::Result<CompiledPredicate> {
+        Predicate::RangeCheck { lo, hi }.compile()
+    }
+
+    #[test]
+    fn test_c2_width_zero_supported() {
+        // width = 0: equality constraint x == lo.
+        let compiled = range_compile(5, 5).unwrap();
+        assert!(compiled.circuit.evaluate(&range_witness(5, 5, 5)).is_ok());
+        assert!(compiled.circuit.evaluate(&range_witness(4, 5, 5)).is_err());
+        assert!(compiled.circuit.evaluate(&range_witness(6, 5, 5)).is_err());
+    }
+
+    #[test]
+    fn test_c2_width_one_supported() {
+        // width = 1: exactly two admissible values.
+        let compiled = range_compile(10, 11).unwrap();
+        assert!(compiled.circuit.evaluate(&range_witness(10, 10, 11)).is_ok());
+        assert!(compiled.circuit.evaluate(&range_witness(11, 10, 11)).is_ok());
+        assert!(compiled.circuit.evaluate(&range_witness(9, 10, 11)).is_err());
+        assert!(compiled.circuit.evaluate(&range_witness(12, 10, 11)).is_err());
+    }
+
+    #[test]
+    fn test_c2_width_2p31_minus_2_supported() {
+        // width = 2^31 - 2 → k = 31, largest tight-but-sound boundary region.
+        let lo = 1u32;
+        let hi = 2u32 * (1 << 30) - 1; // width = 2^31 - 2
+        assert_eq!(hi - lo, (1u32 << 31) - 2);
+        let compiled = range_compile(lo, hi).unwrap();
+        assert!(compiled.circuit.evaluate(&range_witness(lo, lo, hi)).is_ok());
+        assert!(compiled.circuit.evaluate(&range_witness(hi, lo, hi)).is_ok());
+        assert!(
+            compiled
+                .circuit
+                .evaluate(&range_witness(lo + (hi - lo) / 2, lo, hi))
+                .is_ok()
+        );
+        assert!(compiled.circuit.evaluate(&range_witness(lo - 1, lo, hi)).is_err());
+        assert!(compiled.circuit.evaluate(&range_witness(hi + 1, lo, hi)).is_err());
+    }
+
+    #[test]
+    fn test_c2_width_2p31_minus_1_supported() {
+        // width = 2^31 - 1 → k = 31, the maximum supported width.
+        let lo = 0u32;
+        let hi = (1u32 << 31) - 1;
+        let compiled = range_compile(lo, hi).unwrap();
+        for &x in &[lo, hi, 1u32 << 30] {
+            assert!(compiled.circuit.evaluate(&range_witness(x, lo, hi)).is_ok());
+        }
+        assert!(compiled.circuit.evaluate(&range_witness(hi + 1, lo, hi)).is_err());
+    }
+
+    #[test]
+    fn test_c2_width_2p31_rejected() {
+        let err = range_compile(0, 1u32 << 31)
+            .err()
+            .expect("width = 2^31 must be rejected");
+        assert!(
+            matches!(err, crate::MpcithError::InvalidParams(_)),
+            "width = 2^31 must be rejected as InvalidParams, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_c2_width_gt_2p31_rejected() {
+        for (lo, hi) in [
+            (0u32, (1u32 << 31) + 5),
+            (0u32, u32::MAX),
+            (12345u32, u32::MAX),
+        ] {
+            let err = range_compile(lo, hi)
+                .err()
+                .expect("width > 2^31 must be rejected");
+            assert!(
+                matches!(err, crate::MpcithError::InvalidParams(_)),
+                "width > 2^31 must be rejected as InvalidParams, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_c2_boundary_values() {
+        let (lo, hi) = (100u32, 200u32);
+        let compiled = range_compile(lo, hi).unwrap();
+        assert!(compiled.circuit.evaluate(&range_witness(99, lo, hi)).is_err()); // x = lo-1
+        assert!(compiled.circuit.evaluate(&range_witness(100, lo, hi)).is_ok()); // x = lo
+        assert!(compiled.circuit.evaluate(&range_witness(200, lo, hi)).is_ok()); // x = hi
+        assert!(compiled.circuit.evaluate(&range_witness(201, lo, hi)).is_err()); // x = hi+1
+    }
+
+    #[test]
+    fn test_c2_values_near_u32_max() {
+        // Supported high range: width = 100, ending at u32::MAX.
+        let lo = u32::MAX - 100;
+        let hi = u32::MAX;
+        let compiled = range_compile(lo, hi).unwrap();
+        assert!(compiled.circuit.evaluate(&range_witness(u32::MAX, lo, hi)).is_ok());
+        assert!(compiled.circuit.evaluate(&range_witness(u32::MAX - 50, lo, hi)).is_ok());
+        assert!(compiled.circuit.evaluate(&range_witness(lo, lo, hi)).is_ok());
+
+        // Below lo rejected...
+        assert!(compiled.circuit.evaluate(&range_witness(lo - 1, lo, hi)).is_err());
+        // ...including the wrap-aliasing attempt x = 0: shifted would be
+        // 2^32 - lo = 101 > width, forcing slack = width - shifted to wrap
+        // to a huge value that fails the k=7-bit decomposition.
+        assert!(compiled.circuit.evaluate(&range_witness(0, lo, hi)).is_err());
+
+        // A range reaching u32::MAX but wider than 2^31 is unsupported.
+        assert!(range_compile(0, u32::MAX).is_err());
+        assert!(range_compile(1, u32::MAX).is_err());
     }
 }

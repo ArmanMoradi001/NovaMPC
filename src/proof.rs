@@ -1195,4 +1195,49 @@ mod tests {
             );
         }
     }
+
+    // ── C-2 regression: RangeCheck unsound for width >= 2^31 ──────────────
+
+    #[test]
+    fn test_c2_adversarial_large_width_cannot_prove() {
+        // The pre-fix unsoundness: with lo = 0, hi = 2^31 (width = 2^31,
+        // k = 32) the bit decompositions are vacuous and x = 3_000_000_000
+        // (far above hi) could produce a VALID proof. The fix must reject
+        // at compile time — before any proof exists.
+        let params = fast_params();
+        let pred = Predicate::RangeCheck {
+            lo: 0,
+            hi: 2_147_483_648u32, // 2^31
+        };
+
+        // Compile-level: InvalidParams, not a circuit.
+        let compiled = pred.compile();
+        assert!(
+            matches!(compiled, Err(crate::MpcithError::InvalidParams(_))),
+            "RangeCheck with width 2^31 must be rejected as InvalidParams"
+        );
+
+        // End-to-end: prove() must fail for the out-of-range value; no
+        // valid proof can be produced, so there is nothing to verify.
+        let witness = range_witness(3_000_000_000u32, 0, 2_147_483_648);
+        let result = prove(pred, &witness, &[0, 2_147_483_648], &params);
+        assert!(
+            result.is_err(),
+            "x = 3_000_000_000 must not be provable in [0, 2^31]"
+        );
+    }
+
+    #[test]
+    fn test_c2_max_supported_width_end_to_end() {
+        // Largest supported width (2^31 - 1) still proves and verifies
+        // end-to-end through the full MPCitH pipeline.
+        let params = fast_params();
+        let lo = 0u32;
+        let hi = (1u32 << 31) - 1;
+        let x = 1u32 << 30;
+        let pred = Predicate::RangeCheck { lo, hi };
+        let witness = range_witness(x, lo, hi);
+        let proof = prove(pred, &witness, &[lo, hi], &params).unwrap();
+        assert!(verify(&proof, &[lo, hi], &params).unwrap());
+    }
 }
