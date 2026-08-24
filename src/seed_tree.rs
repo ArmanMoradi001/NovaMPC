@@ -121,22 +121,31 @@ pub fn get_co_path(root_seed: [u8; 32], num_parties: usize, hidden_index: usize)
 /// Returns a `Vec` of length `num_parties`.  The slot at `hidden_index` is
 /// left as all-zeros and **must not** be used as a party seed.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if `co_path.len() != log₂(num_parties.next_power_of_two())`.
+/// Returns [`crate::MpcithError::VerificationFailed`] if
+/// `co_path.len() != log₂(num_parties.next_power_of_two())` or if
+/// `hidden_index >= num_parties`.  Both values may come from
+/// attacker-supplied proofs, so malformed input is reported as an error
+/// instead of panicking.
 pub fn reconstruct_leaves_from_co_path(
     co_path: &[[u8; 32]],
     hidden_index: usize,
     num_parties: usize,
-) -> Vec<[u8; 32]> {
+) -> crate::Result<Vec<[u8; 32]>> {
     let n_padded = num_parties.next_power_of_two();
     let depth = n_padded.trailing_zeros() as usize;
-    assert_eq!(
-        co_path.len(),
-        depth,
-        "co_path length ({}) must equal tree depth ({depth})",
-        co_path.len()
-    );
+    if co_path.len() != depth {
+        return Err(crate::MpcithError::VerificationFailed(format!(
+            "co_path length ({}) must equal tree depth ({depth})",
+            co_path.len()
+        )));
+    }
+    if hidden_index >= num_parties {
+        return Err(crate::MpcithError::VerificationFailed(format!(
+            "hidden_index ({hidden_index}) out of range (num_parties = {num_parties})"
+        )));
+    }
 
     let mut leaves = vec![[0u8; 32]; n_padded];
     let mut hidden_pos = n_padded + hidden_index;
@@ -155,7 +164,7 @@ pub fn reconstruct_leaves_from_co_path(
     }
 
     // Return only the first num_parties leaves; padding slots are discarded.
-    leaves[..num_parties].to_vec()
+    Ok(leaves[..num_parties].to_vec())
 }
 
 /// Recursively expand a subtree rooted at binary-heap position `pos`
@@ -185,7 +194,7 @@ mod tests {
         let tree = SeedTree::build(root, num_parties);
         let leaves = tree.leaf_seeds();
         let co = tree.co_path(hidden);
-        let recon = reconstruct_leaves_from_co_path(&co, hidden, num_parties);
+        let recon = reconstruct_leaves_from_co_path(&co, hidden, num_parties).unwrap();
 
         for i in 0..num_parties {
             if i != hidden {
@@ -268,5 +277,22 @@ mod tests {
                 "co-path depth wrong for N={n}"
             );
         }
+    }
+
+    #[test]
+    fn test_reconstruct_rejects_bad_co_path_length_and_index_without_panic() {
+        let tree = SeedTree::build([9u8; 32], 3);
+        let co = tree.co_path(1); // depth 2 for N=3
+
+        // Wrong length (attacker-supplied) must be an Err, not a panic.
+        assert!(reconstruct_leaves_from_co_path(&co[..1], 1, 3).is_err());
+        assert!(reconstruct_leaves_from_co_path(&co[..co.len()], 1, 3).is_ok());
+        let mut too_long = co.clone();
+        too_long.push([7u8; 32]);
+        assert!(reconstruct_leaves_from_co_path(&too_long, 1, 3).is_err());
+
+        // Out-of-range hidden index must be an Err, not a panic.
+        assert!(reconstruct_leaves_from_co_path(&co, 3, 3).is_err());
+        assert!(reconstruct_leaves_from_co_path(&co, 99, 3).is_err());
     }
 }

@@ -408,13 +408,48 @@ pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Res
             )));
         }
 
+        // The opened party indices must be exactly {0..num_parties} \ 
+        // {hidden_party}. Without these checks a prover could submit
+        // duplicate indices (e.g. {(h+2) % N} twice), leaving one party
+        // entirely unverified — its assert/output share entries would then
+        // be free parameters that absorb any sum-check discrepancy, breaking
+        // soundness completely. Out-of-range indices would additionally
+        // panic on `reconstructed_seeds[p]` below.
+        let mut opened_seen = vec![false; num_parties];
+        for opened in &rep_proof.opened_views {
+            let p = opened.view.party_idx;
+            if p >= num_parties {
+                return Err(MpcithError::VerificationFailed(format!(
+                    "Repetition {rep}: opened party index {p} out of range (num_parties = {num_parties})"
+                )));
+            }
+            if p == rep_proof.hidden_party {
+                return Err(MpcithError::VerificationFailed(format!(
+                    "Repetition {rep}: opened view claims hidden party {p}"
+                )));
+            }
+            if opened_seen[p] {
+                return Err(MpcithError::VerificationFailed(format!(
+                    "Repetition {rep}: duplicate opened party index {p}"
+                )));
+            }
+            opened_seen[p] = true;
+        }
+        for (p, &seen) in opened_seen.iter().enumerate() {
+            if !seen && p != rep_proof.hidden_party {
+                return Err(MpcithError::VerificationFailed(format!(
+                    "Repetition {rep}: non-hidden party {p} missing from opened views"
+                )));
+            }
+        }
+
         // Reconstruct all N leaf seeds from the GGM seed-tree co-path.
         // The slot at hidden_party is left as all-zeros and must not be used.
         let reconstructed_seeds = reconstruct_leaves_from_co_path(
             &rep_proof.co_path,
             rep_proof.hidden_party,
             num_parties,
-        );
+        )?;
 
         // Precompute wire_shares for all opened views, always derived from the
         // reconstructed seed.  `wire_shares` is not part of any commitment, so
@@ -1027,5 +1062,137 @@ mod tests {
 
         // Verify should fail: proof is bound to root_a, not root_b
         assert!(verify(&proof, &public_inputs_b, &params).is_err());
+    }
+
+    // ── C-1 regression: opened-party multiset must be exactly {0..N}\{h} ──
+
+    /// Prove AdditionCheck repeatedly until one proof per hidden-party value
+    /// has been observed (bounded attempts).
+    fn proofs_for_every_hidden(
+        params: &ProofParams,
+    ) -> Vec<Proof> {
+        let mut per_hidden: Vec<Option<Proof>> = vec![None; params.num_parties];
+        for _ in 0..500 {
+            let proof = prove(
+                Predicate::AdditionCheck { expected_sum: 7 },
+                &[3, 4],
+                &[7],
+                params,
+            )
+            .unwrap();
+            let h = proof.repetitions[0].hidden_party;
+            if per_hidden[h].is_none() {
+                per_hidden[h] = Some(proof);
+            }
+            if per_hidden.iter().all(|p| p.is_some()) {
+                break;
+            }
+        }
+        assert!(
+            per_hidden.iter().all(|p| p.is_some()),
+            "expected to observe every hidden-party value across repetitions"
+        );
+        per_hidden.into_iter().map(|p| p.unwrap()).collect()
+    }
+
+    #[test]
+    fn test_c1_duplicate_opened_party_rejected() {
+        let params = fast_params();
+        for proof in proofs_for_every_hidden(&params) {
+            let hidden = proof.repetitions[0].hidden_party;
+            let orig = proof.repetitions[0].opened_views.clone();
+            assert_eq!(orig.len(), params.num_parties - 1);
+
+            let mut forged = proof;
+            forged.repetitions[0].opened_views =
+                vec![orig[0].clone(), orig[0].clone()];
+            let result = verify(&forged, &[7], &params);
+            assert!(
+                result.is_err(),
+                "A: duplicated opened party must be rejected (hidden = {hidden})"
+            );
+        }
+    }
+
+    #[test]
+    fn test_c1_omitted_nonhidden_party_rejected() {
+        let params = fast_params();
+        for proof in proofs_for_every_hidden(&params) {
+            let hidden = proof.repetitions[0].hidden_party;
+            let orig = proof.repetitions[0].opened_views.clone();
+
+            // Relabel the second opened view so both claim the same party:
+            // one non-hidden party is silently missing from verification.
+            let mut relabeled = orig[1].clone();
+            relabeled.view.party_idx = orig[0].view.party_idx;
+
+            let mut forged = proof;
+            forged.repetitions[0].opened_views = vec![orig[0].clone(), relabeled];
+            let result = verify(&forged, &[7], &params);
+            assert!(
+                result.is_err(),
+                "B: omitted non-hidden party must be rejected (hidden = {hidden})"
+            );
+        }
+    }
+
+    #[test]
+    fn test_c1_out_of_range_opened_party_rejected_no_panic() {
+        let params = fast_params();
+        for proof in proofs_for_every_hidden(&params) {
+            let hidden = proof.repetitions[0].hidden_party;
+            let orig = proof.repetitions[0].opened_views.clone();
+
+            let mut oor = orig[1].clone();
+            oor.view.party_idx = params.num_parties; // 3 for N=3
+
+            let mut forged = proof;
+            forged.repetitions[0].opened_views = vec![orig[0].clone(), oor];
+            let result = verify(&forged, &[7], &params);
+            assert!(
+                result.is_err(),
+                "C: out-of-range opened party must be rejected (hidden = {hidden})"
+            );
+        }
+    }
+
+    #[test]
+    fn test_c1_hidden_party_in_opened_views_rejected() {
+        let params = fast_params();
+        for proof in proofs_for_every_hidden(&params) {
+            let hidden = proof.repetitions[0].hidden_party;
+            let orig = proof.repetitions[0].opened_views.clone();
+
+            let mut as_opened = orig[1].clone();
+            as_opened.view.party_idx = hidden;
+
+            let mut forged = proof;
+            forged.repetitions[0].opened_views = vec![orig[0].clone(), as_opened];
+            let result = verify(&forged, &[7], &params);
+            assert!(
+                result.is_err(),
+                "D: hidden party claimed as opened must be rejected (hidden = {hidden})"
+            );
+        }
+    }
+
+    #[test]
+    fn test_c1_valid_permutation_of_opened_set_still_verifies() {
+        let params = fast_params();
+        for proof in proofs_for_every_hidden(&params) {
+            let orig = proof.repetitions[0].opened_views.clone();
+
+            // Sanity: unmodified proof verifies.
+            assert!(verify(&proof, &[7], &params).unwrap());
+
+            // E: same set, different order — verification is order-independent.
+            let mut reordered = proof;
+            reordered.repetitions[0].opened_views =
+                vec![orig[1].clone(), orig[0].clone()];
+            assert!(
+                verify(&reordered, &[7], &params).unwrap(),
+                "E: valid permutation of the opened set must still verify"
+            );
+        }
     }
 }
