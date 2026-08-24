@@ -104,9 +104,14 @@ impl Predicate {
 
 /// Compound predicate: combines multiple predicates with logical connectives.
 ///
-/// The `And` variant merges two compiled predicates into a single circuit
-/// so that both sub-predicates are proven over the same witness shares,
-/// party views, and Fiat-Shamir transcript.
+/// The `And` variant merges two compiled predicates into a single circuit so
+/// that both sub-predicates are proven over the SAME primary witness value:
+/// the merged circuit contains an explicit equality link
+/// `left_input_0 == right_input_0 (mod 2^32)` (see
+/// [`CompoundPredicate::merge_same_witness_circuits`]), enforced by the MPC
+/// verification path like any other assertion. This matches
+/// [`CompoundPredicate::generate_witness`], which derives both halves from a
+/// single secret value.
 #[derive(Debug, Clone)]
 pub enum CompoundPredicate {
     Single(Predicate),
@@ -189,6 +194,94 @@ fn remap_gate(
 }
 
 impl CompoundPredicate {
+    /// Merge two sub-circuit wire/gate spaces into one AND circuit and append
+    /// a same-witness equality link between their primary inputs
+    /// (security audit finding C-3).
+    ///
+    /// Every `Predicate` designates input wire 0 as its primary secret value
+    /// (`RangeCheck`: x; `SetMembership`: leaf; arithmetic checks: first
+    /// operand). Without the link, a malicious prover could satisfy the two
+    /// sub-predicates with *different* values (e.g. range-prove 50 while
+    /// membership-proving 42), breaking the intended
+    /// `RangeCheck(x) ∧ SetMembership(x)` semantics.
+    ///
+    /// Wire layout: `[left inputs | right inputs | 3 link wires |
+    /// left intermediates | right intermediates]`. The link wires sit
+    /// immediately after the inputs so the trailing `num_outputs` wires —
+    /// the circuit's declared outputs — remain exactly the concatenation of
+    /// the two sub-circuits' outputs, preserving prior output semantics.
+    ///
+    /// The link enforces `left_val == right_val (mod 2^32)`:
+    ///   neg  = MulConst(right_val, u32::MAX)   // -right_val mod 2^32
+    ///   diff = Add(left_val, neg)              //  left_val - right_val
+    ///   AssertEq(diff, 0)                      // exact equality over Z_{2^32}
+    ///
+    /// Used identically by [`CompoundPredicate::And`] and
+    /// [`CompoundPredicate::range_and_membership_for_verify`] so prover and
+    /// verifier derive byte-identical (equal-hash) circuits.
+    fn merge_same_witness_circuits(c_left: &Circuit, c_right: &Circuit) -> Circuit {
+        const LINK_WIRES: usize = 3;
+        let left_val = 0usize;             // left sub-predicate's primary input
+        let right_val = c_left.num_inputs; // right sub-predicate's primary input
+
+        let num_inputs = c_left.num_inputs + c_right.num_inputs;
+        let num_wires = c_left.num_wires + c_right.num_wires + LINK_WIRES;
+        let num_outputs = c_left.num_outputs + c_right.num_outputs;
+
+        let mut gates =
+            Vec::with_capacity(c_left.gates.len() + c_right.gates.len() + LINK_WIRES);
+
+        // The link gates read ONLY input wires, so they are emitted FIRST.
+        // This matters for the MPC emulator: it pushes wire sharings in gate
+        // execution order, so a gate's declared output index must equal
+        // `num_inputs + <its index in the gate list>`. Emitting the links
+        // first makes their output wires (num_inputs..num_inputs+3) line up,
+        // while every sub-circuit intermediate keeps its shifted position.
+        let neg_right = num_inputs;
+        let diff = num_inputs + 1;
+        let link_out = num_inputs + 2;
+        gates.push(Gate::MulConst {
+            input: right_val,
+            constant: u32::MAX,
+            output: neg_right,
+        });
+        gates.push(Gate::Add {
+            left: left_val,
+            right: neg_right,
+            output: diff,
+        });
+        gates.push(Gate::AssertEq {
+            input: diff,
+            expected: 0,
+            output: link_out,
+        });
+
+        for gate in &c_left.gates {
+            gates.push(remap_gate(
+                gate,
+                c_left.num_inputs,
+                0,
+                c_right.num_inputs + LINK_WIRES,
+            ));
+        }
+
+        for gate in &c_right.gates {
+            gates.push(remap_gate(
+                gate,
+                c_right.num_inputs,
+                c_left.num_inputs,
+                c_left.num_wires + LINK_WIRES,
+            ));
+        }
+
+        Circuit {
+            num_wires,
+            num_inputs,
+            num_outputs,
+            gates,
+        }
+    }
+
     /// Compile this compound predicate into a single merged circuit.
     pub fn compile(&self) -> crate::Result<CompiledPredicate> {
         match self {
@@ -196,43 +289,10 @@ impl CompoundPredicate {
             CompoundPredicate::And(left, right) => {
                 let compiled_left = left.compile()?;
                 let compiled_right = right.compile()?;
-
-                let c_left = &compiled_left.circuit;
-                let c_right = &compiled_right.circuit;
-
-                // Merged wire layout: [left_inputs, right_inputs, left_intermediates, right_intermediates]
-                let num_inputs = c_left.num_inputs + c_right.num_inputs;
-                let num_wires = c_left.num_wires + c_right.num_wires;
-                let num_outputs = c_left.num_outputs + c_right.num_outputs;
-
-                let mut gates = Vec::with_capacity(c_left.gates.len() + c_right.gates.len());
-
-                // Left circuit: inputs at 0..L-1, intermediates at L+R..L+R+LI-1
-                for gate in &c_left.gates {
-                    gates.push(remap_gate(
-                        gate,
-                        c_left.num_inputs,
-                        0,                  // input_offset: left inputs stay at 0
-                        c_right.num_inputs, // intermediate_offset: shift right by R
-                    ));
-                }
-
-                // Right circuit: inputs at L..L+R-1, intermediates at c_left.num_wires..
-                for gate in &c_right.gates {
-                    gates.push(remap_gate(
-                        gate,
-                        c_right.num_inputs,
-                        c_left.num_inputs, // input_offset: right inputs start after left inputs
-                        c_left.num_wires, // intermediate_offset: right intermediates after left's full space
-                    ));
-                }
-
-                let circuit = Circuit {
-                    num_wires,
-                    num_inputs,
-                    num_outputs,
-                    gates,
-                };
+                let circuit = Self::merge_same_witness_circuits(
+                    &compiled_left.circuit,
+                    &compiled_right.circuit,
+                );
 
                 let mut public_inputs = compiled_left.public_inputs;
                 public_inputs.extend_from_slice(&compiled_right.public_inputs);
@@ -272,30 +332,10 @@ impl CompoundPredicate {
     ) -> crate::Result<CompiledPredicate> {
         let left = compile_range_check(lo, hi)?;
         let right = compile_set_membership_from_root(root, depth)?;
-        // Merge identically to CompoundPredicate::And::compile().
-        let c_left = &left.circuit;
-        let c_right = &right.circuit;
-        let num_inputs = c_left.num_inputs + c_right.num_inputs;
-        let num_wires = c_left.num_wires + c_right.num_wires;
-        let num_outputs = c_left.num_outputs + c_right.num_outputs;
-        let mut gates = Vec::with_capacity(c_left.gates.len() + c_right.gates.len());
-        for gate in &c_left.gates {
-            gates.push(remap_gate(gate, c_left.num_inputs, 0, c_right.num_inputs));
-        }
-        for gate in &c_right.gates {
-            gates.push(remap_gate(
-                gate,
-                c_right.num_inputs,
-                c_left.num_inputs,
-                c_left.num_wires,
-            ));
-        }
-        let circuit = Circuit {
-            num_wires,
-            num_inputs,
-            num_outputs,
-            gates,
-        };
+        // Merge identically to CompoundPredicate::And::compile() — including
+        // the C-3 same-witness equality link — so the verifier's circuit
+        // hash matches the prover's exactly.
+        let circuit = Self::merge_same_witness_circuits(&left.circuit, &right.circuit);
         let mut public_inputs = left.public_inputs;
         public_inputs.extend_from_slice(&right.public_inputs);
         Ok(CompiledPredicate {

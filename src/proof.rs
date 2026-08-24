@@ -1240,4 +1240,105 @@ mod tests {
         let proof = prove(pred, &witness, &[lo, hi], &params).unwrap();
         assert!(verify(&proof, &[lo, hi], &params).unwrap());
     }
+
+    // ── C-3 regression: And binds both sub-predicates to the same value ───
+
+    /// Members {10,20,30,42} with Merkle root; 42 sits at index 3.
+    fn c3_setup() -> (crate::merkle::MerkleTree, Vec<u32>, Vec<u32>) {
+        let members = vec![10u32, 20, 30, 42];
+        let tree = crate::merkle::MerkleTree::build(&members);
+        let root = tree.root();
+        let public_inputs = vec![0u32, 100, root]; // [lo, hi, root]
+        (tree, members, public_inputs)
+    }
+
+    #[test]
+    fn test_c3_different_values_must_not_be_provable() {
+        let params = fast_params();
+        let (tree, members, public_inputs) = c3_setup();
+
+        // Adversarial decoupled witness: RangeCheck proves 50 (∈ [0,100])
+        // while SetMembership proves 42 (∈ set). Pre-fix this verified.
+        let compound = CompoundPredicate::range_and_membership(0, 100, members.clone());
+        let mut witness = range_witness(50, 0, 100);
+        witness.extend(set_membership_witness(&tree.prove_membership(3)));
+
+        // Circuit-level: the equality link must make evaluation fail...
+        let compiled = compound.compile().unwrap();
+        assert!(
+            compiled.circuit.evaluate(&witness).is_err(),
+            "decoupled witness (x=50 vs leaf=42) must violate the merged circuit"
+        );
+
+        // ...and end-to-end: no valid proof may exist.
+        let result = prove_compound(compound, &witness, &public_inputs, &params);
+        assert!(
+            result.is_err(),
+            "RangeCheck(50) AND SetMembership(42) must not be provable"
+        );
+    }
+
+    #[test]
+    fn test_c3_same_value_proves_and_verifies() {
+        let params = fast_params();
+        let (_tree, members, public_inputs) = c3_setup();
+
+        let compound = CompoundPredicate::range_and_membership(0, 100, members.clone());
+        let witness = compound.generate_witness(42).unwrap();
+        let proof = prove_compound(compound, &witness, &public_inputs, &params).unwrap();
+
+        // Verify through the predicate-bound path too (circuit-hash check).
+        let compound_v = CompoundPredicate::range_and_membership(0, 100, members);
+        assert!(verify_compound(&compound_v, &proof, &public_inputs, &params).unwrap());
+    }
+
+    #[test]
+    fn test_c3_nested_and_binds_all_subpredicates() {
+        let params = fast_params();
+        let (tree, members, _pi) = c3_setup();
+        let tree_root = tree.root();
+
+        // Nested: RangeCheck[0,100] AND (SetMembership AND RangeCheck[40,44]).
+        let compound = CompoundPredicate::And(
+            Box::new(CompoundPredicate::Single(Predicate::RangeCheck {
+                lo: 0,
+                hi: 100,
+            })),
+            Box::new(CompoundPredicate::And(
+                Box::new(CompoundPredicate::Single(Predicate::SetMembership {
+                    members: members.clone(),
+                })),
+                Box::new(CompoundPredicate::Single(Predicate::RangeCheck {
+                    lo: 40,
+                    hi: 44,
+                })),
+            )),
+        );
+        // Public inputs concatenate in evaluation order: [0,100] ++ [root] ++ [40,44].
+        let public_inputs = vec![0u32, 100, tree_root, 40, 44];
+
+        // Honest witness: 42 satisfies all three sub-predicates → provable.
+        let mut honest = range_witness(42, 0, 100);
+        honest.extend(set_membership_witness(&tree.prove_membership(3)));
+        honest.extend(range_witness(42, 40, 44));
+        let proof = prove_compound(compound.clone(), &honest, &public_inputs, &params).unwrap();
+        assert!(verify(&proof, &public_inputs, &params).unwrap());
+
+        // Decoupled variants must all be unprovable:
+        //   range=50 vs membership=42 vs tail-range=42
+        let mut mixed1 = range_witness(50, 0, 100);
+        mixed1.extend(set_membership_witness(&tree.prove_membership(3)));
+        mixed1.extend(range_witness(42, 40, 44));
+        assert!(prove_compound(compound.clone(), &mixed1, &public_inputs, &params).is_err());
+
+        //   range=42, membership=10, tail-range=42 — every individual
+        //   sub-predicate is TRUE for its own value, but the values differ.
+        let mut mixed2 = range_witness(42, 0, 100);
+        mixed2.extend(set_membership_witness(&tree.prove_membership(0))); // leaf 10
+        mixed2.extend(range_witness(42, 40, 44));
+        assert!(
+            prove_compound(compound, &mixed2, &public_inputs, &params).is_err(),
+            "nested And must reject witnesses whose sub-values differ"
+        );
+    }
 }
