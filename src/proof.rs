@@ -1341,4 +1341,263 @@ mod tests {
             "nested And must reject witnesses whose sub-values differ"
         );
     }
+
+    // ── F-1 regression: padded Merkle slots are not provable positions ────
+
+    fn f1_members() -> Vec<u32> {
+        vec![7u32, 8, 9] // pads to [7, 8, 9, 0]
+    }
+
+    #[test]
+    fn test_f1_end_to_end_small_set_prove_verify() {
+        let params = fast_params();
+        let members = f1_members();
+        let pred = Predicate::SetMembership { members: members.clone() };
+        let tree = crate::merkle::MerkleTree::build(&members);
+        let root = tree.root();
+        for idx in 0..members.len() {
+            let w = set_membership_witness(&tree.prove_membership(idx));
+            let proof = prove(pred.clone(), &w, &[root], &params)
+                .unwrap_or_else(|e| panic!("member {} must be provable: {e}", members[idx]));
+            assert!(
+                verify_predicate(&pred, &proof, &[root], &params).unwrap(),
+                "member {} (index {idx}) must verify end-to-end",
+                members[idx]
+            );
+        }
+    }
+
+    #[test]
+    fn test_f1_end_to_end_padded_zero_prove_rejected() {
+        let params = fast_params();
+        let members = f1_members();
+        let tree = crate::merkle::MerkleTree::build(&members);
+        let root = tree.root();
+        let pred = Predicate::SetMembership { members };
+
+        // THE attack witness: the padded zero leaf at index 3.
+        let mp = tree.prove_membership(3);
+        assert_eq!(mp.leaf, 0, "padded slot of {{7,8,9}} must hold zero");
+        let w = set_membership_witness(&mp);
+        assert!(
+            prove(pred, &w, &[root], &params).is_err(),
+            "proving 0 ∈ {{7,8,9}} via the padded slot must fail"
+        );
+    }
+
+    /// Manually forge a proof for the padded-index membership witness
+    /// (leaf = 0 at index 3 of {7,8,9}), bypassing `prove()`'s witness
+    /// validation exactly like a malicious prover would:
+    ///
+    /// 1. run the MPC emulation honestly on the *invalid* witness,
+    /// 2. commit to every party's view,
+    /// 3. BEFORE deriving challenges, rewrite one fixed party `j`'s public
+    ///    assert/output share entries so the Σ-checks would pass IF j is
+    ///    hidden,
+    /// 4. derive challenges and open accordingly.
+    ///
+    /// Acceptance requires EVERY repetition to hide party j — probability
+    /// 3^{-M} — so verification MUST reject.
+    fn forge_padded_index_proof(params: &ProofParams) -> Proof {
+        use rand::RngCore;
+
+        let members = f1_members();
+        let tree = crate::merkle::MerkleTree::build(&members);
+        let root = tree.root();
+        let pred = Predicate::SetMembership { members };
+        let compiled = pred.compile().unwrap(); // includes the F-1 index bound
+        let circuit_hash = hash_circuit(&compiled.circuit);
+        let num_outputs = compiled.circuit.num_outputs;
+        let num_wires = compiled.circuit.num_wires;
+        let circuit = compiled.circuit;
+
+        // Padded-slot witness: leaf 0 at index 3.
+        let mp = tree.prove_membership(3);
+        assert_eq!(mp.leaf, 0);
+        let witness = set_membership_witness(&mp);
+
+        let assert_constraints = circuit.assert_constraints();
+        let output_start = num_wires - num_outputs;
+        let num_parties = params.num_parties;
+        let num_repetitions = params.num_repetitions;
+        let mut rng = thread_rng();
+
+        // ── Phase 1: honest emulation of the invalid witness + commitments ──
+        let mut execs = Vec::with_capacity(num_repetitions);
+        let mut root_seeds = Vec::with_capacity(num_repetitions);
+        let mut output_shares: Vec<Vec<Vec<u32>>> = Vec::with_capacity(num_repetitions);
+        let mut assert_shares: Vec<Vec<Vec<u32>>> = Vec::with_capacity(num_repetitions);
+        for _ in 0..num_repetitions {
+            let mut rs = [0u8; 32];
+            rng.fill_bytes(&mut rs);
+            root_seeds.push(rs);
+            let st = SeedTree::build(rs, num_parties);
+            let seeds: Vec<PartySeed> = st.leaf_seeds().into_iter().map(PartySeed).collect();
+            let exec = run_mpc_emulation(&circuit, &witness, &seeds, &mut rng).unwrap();
+            output_shares.push(
+                (output_start..num_wires)
+                    .map(|w| (0..num_parties).map(|p| exec.shared_trace.wires[w].shares[p]).collect())
+                    .collect(),
+            );
+            assert_shares.push(
+                assert_constraints
+                    .iter()
+                    .map(|&(w, _)| (0..num_parties).map(|p| exec.shared_trace.wires[w].shares[p]).collect())
+                    .collect(),
+            );
+            execs.push(exec);
+        }
+
+        let mut trees = Vec::with_capacity(num_repetitions);
+        let mut randomness = Vec::with_capacity(num_repetitions);
+        for rep in 0..num_repetitions {
+            let mut rep_rand = Vec::with_capacity(num_parties);
+            let leaves: Vec<[u8; 32]> = (0..num_parties)
+                .map(|p| {
+                    let mut r = [0u8; 32];
+                    rng.fill_bytes(&mut r);
+                    rep_rand.push(r);
+                    let view = &execs[rep].views[p];
+                    commit_view(rep, p, &view.seed, &view.to_commitment_bytes(), &r).0
+                })
+                .collect();
+            randomness.push(rep_rand);
+            trees.push(CommitTree::build(&leaves));
+        }
+
+        // ── Malicious adjustment: fix party j's public entries pre-challenge ──
+        let j = 0usize;
+        for rep in 0..num_repetitions {
+            for (g, &(_, expected)) in assert_constraints.iter().enumerate() {
+                let others: u32 = (0..num_parties)
+                    .filter(|&p| p != j)
+                    .fold(0u32, |acc, p| acc.wrapping_add(assert_shares[rep][g][p]));
+                assert_shares[rep][g][j] = expected.wrapping_sub(others);
+            }
+            for o in 0..num_outputs {
+                let wire = output_start + o;
+                let expected = circuit
+                    .assert_expected_for_output(wire)
+                    .expect("membership circuit output is AssertEq-covered");
+                let others: u32 = (0..num_parties)
+                    .filter(|&p| p != j)
+                    .fold(0u32, |acc, p| acc.wrapping_add(output_shares[rep][o][p]));
+                output_shares[rep][o][j] = expected.wrapping_sub(others);
+            }
+        }
+
+        // ── Phase 2: Fiat-Shamir over roots + adjusted public shares ──
+        let mut commit_bytes = Vec::with_capacity(num_repetitions * 32);
+        for rep in 0..num_repetitions {
+            commit_bytes.extend_from_slice(&trees[rep].root());
+            commit_bytes.extend_from_slice(&encode_public_shares(
+                &assert_shares[rep],
+                &output_shares[rep],
+            ));
+        }
+        let public_inputs = vec![root];
+        let challenges = derive_challenges(
+            &commit_bytes,
+            &public_inputs,
+            &circuit_hash,
+            num_repetitions,
+            num_parties,
+        );
+
+        // ── Phase 3: open all parties except the challenged hidden one ──
+        let mut repetitions = Vec::with_capacity(num_repetitions);
+        for (rep, &hidden) in challenges.iter().enumerate() {
+            let mut opened_views = Vec::with_capacity(num_parties - 1);
+            for p in 0..num_parties {
+                if p == hidden {
+                    continue;
+                }
+                let auth = trees[rep].prove_membership(p);
+                opened_views.push(OpenedView {
+                    view: execs[rep].views[p].clone(),
+                    commitment_randomness: randomness[rep][p],
+                    commitment_auth_path: auth.siblings,
+                });
+            }
+            let co_path = SeedTree::build(root_seeds[rep], num_parties).co_path(hidden);
+            repetitions.push(RepetitionProof {
+                hidden_party: hidden,
+                commitment_root: trees[rep].root(),
+                co_path,
+                opened_views,
+                output_shares: output_shares[rep].clone(),
+                assert_shares: assert_shares[rep].clone(),
+            });
+        }
+
+        Proof {
+            public_inputs,
+            expected_outputs: vec![0], // inert: output wire is AssertEq-covered
+            repetitions,
+            params: params.clone(),
+            circuit,
+            circuit_hash,
+            num_circuit_wires: num_wires,
+            num_circuit_outputs: num_outputs,
+        }
+    }
+
+    #[test]
+    fn test_f1_manual_forged_padded_index_proof_rejected() {
+        let members = f1_members();
+        let root = crate::merkle::MerkleTree::build(&members).root();
+
+        // Balanced params: per-proof acceptance probability 3^{-96} ≈ 4.6e-46.
+        let balanced = ProofParams::balanced();
+        let forged = forge_padded_index_proof(&balanced);
+        let result = verify(&forged, &[root], &balanced);
+        assert!(
+            !matches!(result, Ok(true)),
+            "manually forged padded-index proof must not verify (balanced params)"
+        );
+
+        // Fast params: per-attempt forgery probability 3^{-10} ≈ 1.7e-5;
+        // a handful of attempts must all be rejected.
+        let fast = fast_params();
+        for attempt in 0..5 {
+            let f = forge_padded_index_proof(&fast);
+            assert!(
+                !matches!(verify(&f, &[root], &fast), Ok(true)),
+                "forged attempt {attempt} must not verify"
+            );
+        }
+    }
+
+    #[test]
+    fn test_f1_tampered_index_share_rejected() {
+        let params = fast_params();
+        let members = f1_members();
+        let pred = Predicate::SetMembership { members };
+        let tree = crate::merkle::MerkleTree::build(&f1_members());
+        let root = tree.root();
+
+        // Honest proof for real member 8 (index 1).
+        let w = set_membership_witness(&tree.prove_membership(1));
+        let mut proof = prove(pred, &w, &[root], &params).unwrap();
+
+        // leaf_index lives at input wire 1. Flip the residual party's share
+        // of that wire wherever that party is opened: the tampered value no
+        // longer matches the committed view, so verification must reject.
+        let n = params.num_parties;
+        let mut touched = false;
+        for rep in proof.repetitions.iter_mut() {
+            for ov in rep.opened_views.iter_mut() {
+                if ov.view.party_idx == n - 1 && ov.view.residual_input_shares.len() > 1 {
+                    ov.view.residual_input_shares[1] ^= 0xFF;
+                    touched = true;
+                }
+            }
+        }
+        assert!(
+            touched,
+            "expected the residual party to be opened in at least one repetition"
+        );
+        let result = verify(&proof, &[root], &params);
+        assert!(result.is_err(), "tampered leaf_index share must cause rejection");
+    }
 }

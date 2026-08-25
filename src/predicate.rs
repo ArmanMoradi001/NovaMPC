@@ -320,18 +320,25 @@ impl CompoundPredicate {
     }
 
     /// Build the same compound circuit as `range_and_membership` from the
-    /// *public* fields available to the verifier (root + depth), WITHOUT
-    /// needing the full member set. Used by `verify_transaction_proof` to
-    /// independently derive the expected circuit hash and detect circuit
-    /// substitution attacks.
+    /// *public* fields available to the verifier (root, depth and member
+    /// count), WITHOUT needing the full member set. Used by
+    /// `verify_transaction_proof` to independently derive the expected
+    /// circuit hash and detect circuit substitution attacks.
+    ///
+    /// `num_members` MUST equal the true length of the authorized set the
+    /// root was built from: it is a public constant inside the F-1
+    /// index-bound constraint (`leaf_index < num_members`), so an incorrect
+    /// count produces a different circuit hash and verification fails
+    /// closed — it can never loosen the constraint.
     pub fn range_and_membership_for_verify(
         lo: u32,
         hi: u32,
         root: u32,
         depth: usize,
+        num_members: usize,
     ) -> crate::Result<CompiledPredicate> {
         let left = compile_range_check(lo, hi)?;
-        let right = compile_set_membership_from_root(root, depth)?;
+        let right = compile_set_membership_from_root(root, depth, num_members)?;
         // Merge identically to CompoundPredicate::And::compile() — including
         // the C-3 same-witness equality link — so the verifier's circuit
         // hash matches the prover's exactly.
@@ -470,15 +477,93 @@ fn compile_range_check(lo: u32, hi: u32) -> crate::Result<CompiledPredicate> {
     })
 }
 
+/// Enforce `leaf_index < num_members` inside the circuit (audit finding F-1).
+///
+/// [`crate::merkle::MerkleTree::build`] pads non-power-of-two member lists
+/// with zero leaves at indices `[num_members, 2^depth)`. Those padded slots
+/// have perfectly valid authentication paths, so without an explicit bound a
+/// prover could open a padded slot and "prove" that the padding value is a
+/// member of the set.
+///
+/// The constraint exploits the already-enforced `depth`-bit decomposition of
+/// `leaf_index` (`bit_wires`; booleanity is guaranteed by the caller via
+/// `bit_decompose_on`):
+///
+/// ```text
+///     index < num_members
+///   ⟺ index + (2^depth − num_members) ≤ 2^depth − 1
+///   ⟺ adding the public constant pad = 2^depth − num_members to the index
+///     produces no carry out of bit depth−1
+/// ```
+///
+/// The ripple-carry overflow bit is computed with the existing gate set from
+/// the boolean index wires and public constants only:
+///
+/// ```text
+///     c₀ = 0
+///     c_{i+1} = bᵢ·pᵢ + cᵢ·(bᵢ ⊕ pᵢ)      (pᵢ = i-th bit of pad)
+///     AssertEq(c_depth, 0)
+/// ```
+///
+/// This costs O(depth) gates and **zero** additional witness wires, and is
+/// emitted identically by both compilation paths (`compile_set_membership`
+/// and `compile_set_membership_from_root`) so the prover/verifier circuit
+/// hashes continue to match. A verifier that compiles with a different
+/// `num_members` derives a different circuit hash and fails closed.
+fn constrain_index_below_num_members(
+    builder: &mut CircuitBuilder,
+    bit_wires: &[usize],
+    num_members: usize,
+) {
+    let depth = bit_wires.len();
+    debug_assert!(num_members >= 1, "empty sets are rejected at compile time");
+    debug_assert!(num_members <= 1usize << depth);
+
+    let pad = ((1u32 << depth) as u64).wrapping_sub(num_members as u64) as u32;
+
+    // `None` models a carry that is structurally zero (no wire needed yet).
+    let mut carry: Option<usize> = None;
+    for (i, &b) in bit_wires.iter().enumerate() {
+        let p = (pad >> i) & 1;
+        debug_assert!(p <= 1);
+        carry = match (p, carry) {
+            (0, None) => None,
+            // p = 0: c' = c · b
+            (0, Some(c)) => Some(builder.mul(c, b)),
+            // p = 1, carry still zero: c' = b
+            (1, None) => Some(b),
+            // p = 1: c' = b + c·¬b   (= b OR c)
+            (1, Some(c)) => {
+                let not_b = {
+                    let t = builder.mul_const(b, u32::MAX);
+                    builder.add_const(t, 1)
+                };
+                let c_not_b = builder.mul(c, not_b);
+                Some(builder.add(b, c_not_b))
+            }
+            _ => unreachable!("pad bit is a single bit"),
+        };
+    }
+
+    // Carry-out of the addition must be 0: index + pad fits in depth bits,
+    // i.e. index < num_members.
+    if let Some(top) = carry {
+        builder.assert_eq(top, 0);
+    }
+}
+
 /// Circuit: assert leaf ∈ members via Merkle inclusion proof.
 ///
 /// At compile time the member set is hashed into a Merkle tree; the root
 /// becomes the sole public input. The private witness is
 /// `[leaf, leaf_index, bit_0..bit_{d-1}, sibling_0..sibling_{d-1}]`.
 ///
-/// The circuit decomposes `leaf_index` into boolean bits, then iteratively
-/// hashes from the leaf upward using MiMC, selecting left/right ordering
-/// via the path bits. The final hash is asserted equal to the root.
+/// The circuit decomposes `leaf_index` into boolean bits, constrains
+/// `leaf_index < members.len()` (see
+/// [`constrain_index_below_num_members`] — this closes the padded-slot
+/// soundness hole, since `MerkleTree::build` pads with zeros), then
+/// iteratively hashes from the leaf upward using MiMC, selecting left/right
+/// ordering via the path bits. The final hash is asserted equal to the root.
 fn compile_set_membership(members: &[u32]) -> crate::Result<CompiledPredicate> {
     if members.is_empty() {
         return Err(crate::MpcithError::InvalidParams(
@@ -489,6 +574,11 @@ fn compile_set_membership(members: &[u32]) -> crate::Result<CompiledPredicate> {
     let tree = MerkleTree::build(members);
     let root = tree.root();
     let depth = members.len().next_power_of_two().trailing_zeros() as usize;
+    if depth >= 32 {
+        return Err(crate::MpcithError::InvalidParams(format!(
+            "Set membership supports at most 2^31 members (got depth {depth})"
+        )));
+    }
 
     // Wire layout:
     //   0              : leaf
@@ -503,6 +593,11 @@ fn compile_set_membership(members: &[u32]) -> crate::Result<CompiledPredicate> {
 
     // Constrain leaf_index bits (boolean + reconstruction).
     bit_decompose_on(&mut builder, 1, &bit_wires);
+
+    // Soundness constraint (audit finding F-1): the padded slots of the
+    // Merkle tree must not be provable positions. Enforce
+    // `leaf_index < members.len()` cryptographically, in-circuit.
+    constrain_index_below_num_members(&mut builder, &bit_wires, members.len());
 
     // Walk up the tree.
     let mut current = 0usize; // leaf wire
@@ -549,15 +644,33 @@ fn compile_set_membership(members: &[u32]) -> crate::Result<CompiledPredicate> {
     })
 }
 
-/// Like [`compile_set_membership`] but takes the Merkle `root` and tree
-/// `depth` directly instead of the full member list. This lets the verifier
-/// independently reconstruct the exact same circuit (and hence its hash)
-/// from the public statement alone, without ever seeing the private members.
-fn compile_set_membership_from_root(root: u32, depth: usize) -> crate::Result<CompiledPredicate> {
+/// Like [`compile_set_membership`] but takes the Merkle `root`, tree
+/// `depth` **and the public member count** directly instead of the full
+/// member list. This lets the verifier independently reconstruct the exact
+/// same circuit (and hence its hash) from the public statement alone,
+/// without ever seeing the private members. The member count MUST be the
+/// true `members.len()` of the set the root was built from: it is baked
+/// into the F-1 index-bound constraint, so a wrong count yields a
+/// different circuit hash and fails closed at verification time.
+fn compile_set_membership_from_root(
+    root: u32,
+    depth: usize,
+    num_members: usize,
+) -> crate::Result<CompiledPredicate> {
     if depth == 0 {
         return Err(crate::MpcithError::InvalidParams(
             "Set membership depth must be at least 1".into(),
         ));
+    }
+    if depth >= 32 {
+        return Err(crate::MpcithError::InvalidParams(format!(
+            "Set membership supports at most 2^31 members (got depth {depth})"
+        )));
+    }
+    if num_members == 0 || num_members > (1usize << depth) {
+        return Err(crate::MpcithError::InvalidParams(format!(
+            "Member count {num_members} inconsistent with tree depth {depth}"
+        )));
     }
     let total_inputs = 2 + 2 * depth;
     let mut builder = CircuitBuilder::new(total_inputs);
@@ -566,6 +679,10 @@ fn compile_set_membership_from_root(root: u32, depth: usize) -> crate::Result<Co
     let sibling_wires: Vec<usize> = (2 + depth..2 + 2 * depth).collect();
 
     bit_decompose_on(&mut builder, 1, &bit_wires);
+
+    // Soundness constraint (audit finding F-1): identical to the proving
+    // path so both compilers derive hash-equal circuits.
+    constrain_index_below_num_members(&mut builder, &bit_wires, num_members);
 
     let mut current = 0usize;
     for i in 0..depth {
@@ -978,5 +1095,181 @@ mod tests {
         // A range reaching u32::MAX but wider than 2^31 is unsupported.
         assert!(range_compile(0, u32::MAX).is_err());
         assert!(range_compile(1, u32::MAX).is_err());
+    }
+
+    // ── F-1 regression: padded Merkle slots are not provable positions ────
+
+    /// Witness for an arbitrary (leaf, leaf_index) against the tree built
+    /// from `members` — lets tests aim at padded slots directly.
+    fn membership_witness_at(members: &[u32], idx: usize, leaf: u32) -> Vec<u32> {
+        let tree = MerkleTree::build(members);
+        let mp = tree.prove_membership(idx);
+        let depth = mp.siblings.len();
+        let mut w = vec![leaf, idx as u32];
+        for i in 0..depth {
+            w.push(((idx >> i) & 1) as u32);
+        }
+        w.extend(&mp.siblings);
+        w
+    }
+
+    #[test]
+    fn test_f1_padded_zero_leaf_unprovable_3set() {
+        // THE attack: members = {7,8,9} pads to [7,8,9,0]; the attacker must
+        // NOT be able to prove 0 ∈ S via padded index 3. The circuit itself
+        // (not prove()) must reject it: index 3 violates index < 3.
+        let members = vec![7u32, 8, 9];
+        let compiled = Predicate::SetMembership { members: members.clone() }
+            .compile()
+            .unwrap();
+        let w = membership_witness_at(&members, 3, 0);
+        assert_eq!(w[0], 0, "padded slot must hold zero");
+        assert!(
+            compiled.circuit.evaluate(&w).is_err(),
+            "padded index 3 must violate the circuit's index < len constraint"
+        );
+    }
+
+    #[test]
+    fn test_f1_all_real_members_provable_3set() {
+        let members = vec![7u32, 8, 9];
+        let compiled = Predicate::SetMembership { members: members.clone() }
+            .compile()
+            .unwrap();
+        for (idx, &value) in members.iter().enumerate() {
+            let w = membership_witness_at(&members, idx, value);
+            compiled.circuit.evaluate(&w).unwrap_or_else(|e| {
+                panic!("real member {value} at index {idx} must satisfy the circuit: {e}")
+            });
+        }
+    }
+
+    #[test]
+    fn test_f1_five_element_set_padding_rejected() {
+        // 5 members pad to 8 leaves: indices 5,6,7 are padded zeros.
+        let members = vec![11u32, 22, 33, 44, 55];
+        let compiled = Predicate::SetMembership { members: members.clone() }
+            .compile()
+            .unwrap();
+        for (idx, &value) in members.iter().enumerate() {
+            let w = membership_witness_at(&members, idx, value);
+            compiled.circuit.evaluate(&w).unwrap_or_else(|e| {
+                panic!("real member {value} at index {idx} must be provable: {e}")
+            });
+        }
+        for idx in 5..8usize {
+            let w = membership_witness_at(&members, idx, 0);
+            assert!(
+                compiled.circuit.evaluate(&w).is_err(),
+                "padded index {idx} must be rejected"
+            );
+            // A garbage leaf at a padded position must also fail (root check).
+            let w2 = membership_witness_at(&members, idx, 12345);
+            assert!(compiled.circuit.evaluate(&w2).is_err());
+        }
+        // Proving that the padding VALUE is a member must be impossible.
+        let w3 = membership_witness_at(&members, 6, 0);
+        assert!(compiled.circuit.evaluate(&w3).is_err());
+    }
+
+    #[test]
+    fn test_f1_power_of_two_set_all_members_provable() {
+        // No padding exists; the constraint is vacuous (pad = 0) and every
+        // real member must still verify.
+        let members = vec![10u32, 20, 30, 42];
+        let compiled = Predicate::SetMembership { members: members.clone() }
+            .compile()
+            .unwrap();
+        for (idx, &value) in members.iter().enumerate() {
+            let w = membership_witness_at(&members, idx, value);
+            compiled.circuit.evaluate(&w).unwrap_or_else(|e| {
+                panic!("power-of-two set member {value} at index {idx}: {e}")
+            });
+        }
+        // Out-of-range index 4 does not exist even as a padded slot here.
+        // Build its witness manually (siblings copied from index 3's path):
+        // the constraint must reject it regardless of which check fires
+        // first (index < len or the MiMC root equality).
+        let mut w = membership_witness_at(&members, 3, 0);
+        w[1] = 4; // claimed leaf_index
+        for i in 0..2 {
+            w[2 + i] = ((4 >> i) & 1) as u32; // bits of 4 = [0, 0]
+        }
+        assert!(compiled.circuit.evaluate(&w).is_err());
+    }
+
+    #[test]
+    fn test_f1_single_member_set_depth0_still_works() {
+        // depth = 0: no index bits exist, so the carry-chain constraint is
+        // skipped — sound because the circuit forces leaf == root == the
+        // sole member directly. No new depth-0 bug may be introduced.
+        let members = vec![42u32];
+        let pred = Predicate::SetMembership { members: members.clone() };
+        let compiled = pred.compile().unwrap();
+        let w = membership_witness_at(&members, 0, 42);
+        compiled.circuit.evaluate(&w).unwrap();
+        let mut bad = membership_witness_at(&members, 0, 43);
+        bad[0] = 43;
+        assert!(compiled.circuit.evaluate(&bad).is_err());
+    }
+
+    #[test]
+    fn test_f1_empty_set_rejected() {
+        let err = Predicate::SetMembership { members: vec![] }
+            .compile()
+            .err()
+            .expect("empty set must not compile");
+        assert!(matches!(err, crate::MpcithError::InvalidParams(_)));
+    }
+
+    #[test]
+    fn test_f1_compiler_paths_hash_equal_with_bound() {
+        // Prover path and verification path must derive hash-equal circuits
+        // when (and only when) the member count matches.
+        let members = vec![10u32, 20, 30, 42, 50]; // non-power-of-two → padding + bound active
+        let lo = 0u32;
+        let hi = 100u32;
+        let prover = CompoundPredicate::range_and_membership(lo, hi, members.clone())
+            .compile()
+            .unwrap();
+
+        let tree = MerkleTree::build(&members);
+        let root = tree.root();
+        let depth = members.len().next_power_of_two().trailing_zeros() as usize;
+
+        let verifier = CompoundPredicate::range_and_membership_for_verify(
+            lo, hi, root, depth, members.len(),
+        )
+        .unwrap();
+        assert_eq!(
+            crate::fiat_shamir::hash_circuit(&prover.circuit),
+            crate::fiat_shamir::hash_circuit(&verifier.circuit),
+            "both compilation paths must embed identical index-bound constraints"
+        );
+
+        // Fail-closed: a WRONG member count must change the circuit hash.
+        for wrong in [members.len() - 1, members.len() + 1, 1] {
+            let bad = CompoundPredicate::range_and_membership_for_verify(
+                lo, hi, root, depth, wrong,
+            );
+            match bad {
+                Ok(compiled_bad) => assert_ne!(
+                    crate::fiat_shamir::hash_circuit(&prover.circuit),
+                    crate::fiat_shamir::hash_circuit(&compiled_bad.circuit),
+                    "wrong count {wrong} must yield a different (stricter) circuit"
+                ),
+                Err(_) => {} // rejected outright — also fail-closed
+            }
+        }
+    }
+
+    #[test]
+    fn test_f1_absurd_depth_rejected_before_shift() {
+        // Defensive guard: hostile/oversized depths must not reach the
+        // `1u32 << depth` shift inside the constraint builder.
+        let err = compile_set_membership_from_root(12345, 40, 100)
+            .err()
+            .expect("depth 40 must be rejected");
+        assert!(matches!(err, crate::MpcithError::InvalidParams(_)));
     }
 }

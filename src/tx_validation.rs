@@ -137,9 +137,11 @@ pub fn create_transaction_proof(
 /// always-true circuit while claiming the correct `public_inputs`, bypassing
 /// the range and membership constraints entirely.
 ///
-/// The `members` field of the statement is NOT used here — the verifier only
-/// needs the Merkle root and tree depth, both of which are already part of
-/// the public statement.
+/// The only part of the statement's `members` field used here is its
+/// *length*: since audit finding F-1, the SetMembership circuit constrains
+/// `leaf_index < members.len()` in-circuit, so the verifier must compile
+/// with the true member count. A wrong length changes the expected circuit
+/// hash and fails closed.
 pub fn verify_transaction_proof(
     proof: &Proof,
     statement: &TransactionStatement,
@@ -147,13 +149,18 @@ pub fn verify_transaction_proof(
 ) -> Result<bool> {
     let (lo, hi) = statement.amount_range;
 
-    // Independently compile the expected circuit from the public statement
-    // (no member list needed — only the root and depth are required).
+    // Independently compile the expected circuit from the public statement.
+    // The member count is baked into the F-1 index-bound constraint
+    // (`leaf_index < num_members`) of the SetMembership sub-circuit, so the
+    // verifier must supply the true length of the authorized set via
+    // `statement.members`. A wrong count changes the expected circuit hash
+    // and fails closed — it can never loosen the membership constraint.
     let expected_compiled = CompoundPredicate::range_and_membership_for_verify(
         lo,
         hi,
         statement.authorized_set_root,
         statement.merkle_depth,
+        statement.members.len(),
     )?;
     let expected_hash = hash_circuit(&expected_compiled.circuit);
 
