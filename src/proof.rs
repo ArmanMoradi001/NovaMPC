@@ -92,7 +92,7 @@ impl Proof {
 
 /// Serialize per-party `AssertEq`/output shares in a canonical order for
 /// binding into the Fiat-Shamir transcript. Must match exactly between
-/// `prove_compiled` and `verify`.
+/// `prove_compiled` and `verify_unchecked`.
 fn encode_public_shares(assert_shares: &[Vec<u32>], output_shares: &[Vec<u32>]) -> Vec<u8> {
     let mut bytes = Vec::new();
     for shares in assert_shares {
@@ -134,8 +134,8 @@ pub const MAX_PROOF_CIRCUIT_GATES: usize = 1 << 22;
 /// as defense in depth.
 ///
 /// After this function returns `Ok`, every index and length used by the
-/// rest of `verify` is guaranteed to be in range, so malformed proofs can
-/// only cause `Err`, never a panic or an unbounded allocation.
+/// rest of `verify_unchecked` is guaranteed to be in range, so malformed
+/// proofs can only cause `Err`, never a panic or an unbounded allocation.
 fn validate_proof_structure(proof: &Proof, params: &ProofParams) -> Result<()> {
     let circuit = &proof.circuit;
     let num_parties = params.num_parties;
@@ -345,7 +345,8 @@ pub fn prove(
 ///
 /// Compiles the compound predicate into a single merged circuit, then runs
 /// the same MPC-in-the-Head protocol as `prove()`. The resulting `Proof`
-/// is verified by the existing `verify()` without modification.
+/// is verified by [`verify_compound`], which binds verification to the
+/// compiled compound circuit before running the shared transcript checks.
 pub fn prove_compound(
     predicate: CompoundPredicate,
     witness: &[u32],
@@ -517,20 +518,23 @@ fn prove_compiled(
 
 // ─── Proof verification ───────────────────────────────────────────────────────
 
-/// Verify a proof against the given public inputs.
+/// Internal unchecked verifier — verifies that the embedded circuit hash matches
+/// and that the MPCitH transcript is valid, but does **not** check that the
+/// embedded circuit corresponds to the predicate the application intended.
 ///
-/// **Warning:** this function does **not** verify that `proof.circuit` matches
-/// any particular predicate — it only checks that `proof.circuit_hash` matches
-/// the circuit embedded in the proof.  A malicious prover can embed a
-/// trivially-satisfiable circuit in `Proof.circuit` and this function will
-/// accept it, since nothing ties the circuit back to the predicate the caller
-/// actually intended to check.
+/// A malicious prover can embed a trivially-satisfiable circuit and this
+/// function will accept it.  Public callers must use the predicate-bound
+/// wrappers [`verify_predicate`], [`verify_compound`] or
+/// [`crate::tx_validation::verify_transaction_proof`] which hash the expected
+/// circuit independently and fail closed on mismatch.
 ///
-/// Prefer [`verify_predicate`] or [`verify_compound`] for application-level
-/// verification, or perform your own circuit-hash check against the expected
-/// compiled circuit (as `tx_validation::verify_transaction_proof` does) before
-/// calling this function.
-pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Result<bool> {
+/// Kept `pub(crate)` intentionally: external crates cannot call this without
+/// opting into the circuit-substitution foot-gun.
+pub(crate) fn verify_unchecked(
+    proof: &Proof,
+    public_inputs: &[u32],
+    params: &ProofParams,
+) -> Result<bool> {
     params.validate()?;
 
     if proof.public_inputs != public_inputs {
@@ -835,13 +839,14 @@ pub fn verify(proof: &Proof, public_inputs: &[u32], params: &ProofParams) -> Res
 /// Verify a proof against a specific predicate, guarding against
 /// circuit-substitution attacks.
 ///
+/// This is the safe, application-facing verifier for simple predicates.
 /// Independently recompiles `predicate` to obtain the expected circuit,
-/// hashes it (using the same `hash_circuit` used by [`verify`] internally),
-/// and compares against `proof.circuit_hash`.  If they differ, returns a
-/// [`MpcithError::VerificationFailed`] indicating a possible
+/// hashes it (using the same `hash_circuit` used by [`verify_unchecked`]
+/// internally), and compares against `proof.circuit_hash`.  If they differ,
+/// returns a [`MpcithError::VerificationFailed`] indicating a possible
 /// circuit-substitution attack, mirroring
-/// `tx_validation::verify_transaction_proof`.  Only delegates to [`verify`]
-/// when the hashes match.
+/// `tx_validation::verify_transaction_proof`.  Only delegates to
+/// [`verify_unchecked`] when the hashes match.
 pub fn verify_predicate(
     predicate: &Predicate,
     proof: &Proof,
@@ -858,19 +863,20 @@ pub fn verify_predicate(
         ));
     }
 
-    verify(proof, public_inputs, params)
+    verify_unchecked(proof, public_inputs, params)
 }
 
 /// Verify a proof against a specific compound predicate, guarding against
 /// circuit-substitution attacks.
 ///
+/// This is the safe, application-facing verifier for compound predicates.
 /// Independently recompiles `compound` to obtain the expected circuit,
-/// hashes it (using the same `hash_circuit` used by [`verify`] internally),
-/// and compares against `proof.circuit_hash`.  If they differ, returns a
-/// [`MpcithError::VerificationFailed`] indicating a possible
+/// hashes it (using the same `hash_circuit` used by [`verify_unchecked`]
+/// internally), and compares against `proof.circuit_hash`.  If they differ,
+/// returns a [`MpcithError::VerificationFailed`] indicating a possible
 /// circuit-substitution attack, mirroring
-/// `tx_validation::verify_transaction_proof`.  Only delegates to [`verify`]
-/// when the hashes match.
+/// `tx_validation::verify_transaction_proof`.  Only delegates to
+/// [`verify_unchecked`] when the hashes match.
 pub fn verify_compound(
     compound: &CompoundPredicate,
     proof: &Proof,
@@ -887,7 +893,7 @@ pub fn verify_compound(
         ));
     }
 
-    verify(proof, public_inputs, params)
+    verify_unchecked(proof, public_inputs, params)
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -906,8 +912,8 @@ mod tests {
     fn test_prove_verify_addition() {
         let params = fast_params();
         let pred = Predicate::AdditionCheck { expected_sum: 7 };
-        let proof = prove(pred, &[3, 4], &[7], &params).unwrap();
-        assert!(verify(&proof, &[7], &params).unwrap());
+        let proof = prove(pred.clone(), &[3, 4], &[7], &params).unwrap();
+        assert!(verify_predicate(&pred, &proof, &[7], &params).unwrap());
     }
 
     #[test]
@@ -925,8 +931,10 @@ mod tests {
         let proof = prove(pred.clone(), &[3, 4], &[7], &params).unwrap();
 
         // Malicious prover swaps in a different, trivially-true circuit and
-        // rebinds circuit_hash to it so `verify` would accept it; only
-        // verify_predicate's predicate-binding check can catch this.
+        // rebinds circuit_hash to it so the transcript stays internally
+        // consistent; only verify_predicate's independent, predicate-derived
+        // circuit-hash check can catch this (the unchecked core never learns
+        // which predicate the application intended).
         let mut builder = crate::circuit::CircuitBuilder::new(2);
         builder.assert_eq(0, 0);
         let trivial_circuit = builder.build(1);
@@ -937,6 +945,7 @@ mod tests {
         forged.num_circuit_wires = trivial_circuit.num_wires;
         forged.num_circuit_outputs = trivial_circuit.num_outputs;
 
+        // The public, predicate-bound API must reject it.
         let result = verify_predicate(&pred, &forged, &[7], &params);
         assert!(result.is_err(), "substituted circuit must be rejected");
         let err = result.unwrap_err();
@@ -952,6 +961,37 @@ mod tests {
     }
 
     #[test]
+    fn test_h2_proof_for_p_cannot_be_verified_as_q() {
+        // A proof honestly generated for predicate P must be rejected when
+        // presented under a different predicate Q — even a "similar" one.
+        let params = fast_params();
+
+        let p = Predicate::AdditionCheck { expected_sum: 7 };
+        let proof_p = prove(p.clone(), &[3, 4], &[7], &params).unwrap();
+
+        // Same shape, different constant.
+        let q1 = Predicate::AdditionCheck { expected_sum: 8 };
+        assert!(
+            verify_predicate(&q1, &proof_p, &[7], &params).is_err(),
+            "AdditionCheck{{7}} proof must not verify as AdditionCheck{{8}}"
+        );
+
+        // Entirely different predicate family.
+        let q2 = Predicate::MultiplicationCheck { expected_product: 12 };
+        assert!(
+            verify_predicate(&q2, &proof_p, &[7], &params).is_err(),
+            "AdditionCheck proof must not verify under MultiplicationCheck"
+        );
+
+        // RangeCheck over different bounds.
+        let q3 = Predicate::RangeCheck { lo: 0, hi: 10 };
+        assert!(
+            verify_predicate(&q3, &proof_p, &[7], &params).is_err(),
+            "AdditionCheck proof must not verify under an unrelated RangeCheck"
+        );
+    }
+
+    #[test]
     fn test_forged_expected_outputs_field_is_inert() {
         // Proof::expected_outputs used to be the *sole* value the verifier
         // checked reconstructed output shares against, with nothing tying
@@ -960,10 +1000,10 @@ mod tests {
         // the circuit's own AssertEq gate instead.
         let params = fast_params();
         let pred = Predicate::AdditionCheck { expected_sum: 7 };
-        let mut proof = prove(pred, &[3, 4], &[7], &params).unwrap();
+        let mut proof = prove(pred.clone(), &[3, 4], &[7], &params).unwrap();
         proof.expected_outputs[0] = 999;
         assert!(
-            verify(&proof, &[7], &params).unwrap(),
+            verify_predicate(&pred, &proof, &[7], &params).unwrap(),
             "tampering the prover-supplied expected_outputs field must not affect verification"
         );
     }
@@ -979,14 +1019,17 @@ mod tests {
         let pred = Predicate::RangeCheck { lo: 1, hi: 1000 };
         let witness = range_witness(500, 1, 1000);
         let mut proof = prove(pred, &witness, &[1, 1000], &params).unwrap();
-        assert!(verify(&proof, &[1, 1000], &params).unwrap());
+        assert!(verify_unchecked(&proof, &[1, 1000], &params).unwrap());
 
         // Tamper party 0's share of the very first AssertEq gate (a boolean
         // check b*(b-1)==0 from bit_decompose). This breaks the sum, so it
         // must be rejected regardless of which party ends up hidden.
+        //
+        // Uses the internal `verify_unchecked` primitive deliberately: these
+        // are regression tests for the core transcript checks themselves.
         proof.repetitions[0].assert_shares[0][0] =
             proof.repetitions[0].assert_shares[0][0].wrapping_add(1);
-        let result = verify(&proof, &[1, 1000], &params);
+        let result = verify_unchecked(&proof, &[1, 1000], &params);
         assert!(result.is_err(), "forged AssertEq share sum must cause Err");
     }
 
@@ -1000,13 +1043,13 @@ mod tests {
         let pred = Predicate::RangeCheck { lo: 1, hi: 1000 };
         let witness = range_witness(500, 1, 1000);
         let mut proof = prove(pred, &witness, &[1, 1000], &params).unwrap();
-        assert!(verify(&proof, &[1, 1000], &params).unwrap());
+        assert!(verify_unchecked(&proof, &[1, 1000], &params).unwrap());
 
         proof.repetitions[0].assert_shares[0][0] =
             proof.repetitions[0].assert_shares[0][0].wrapping_add(1);
         proof.repetitions[0].assert_shares[0][1] =
             proof.repetitions[0].assert_shares[0][1].wrapping_sub(1);
-        let result = verify(&proof, &[1, 1000], &params);
+        let result = verify_unchecked(&proof, &[1, 1000], &params);
         assert!(
             result.is_err(),
             "sum-preserving shift between parties' AssertEq shares must still be rejected"
@@ -1019,8 +1062,8 @@ mod tests {
         let pred = Predicate::MultiplicationCheck {
             expected_product: 12,
         };
-        let proof = prove(pred, &[3, 4], &[12], &params).unwrap();
-        assert!(verify(&proof, &[12], &params).unwrap());
+        let proof = prove(pred.clone(), &[3, 4], &[12], &params).unwrap();
+        assert!(verify_predicate(&pred, &proof, &[12], &params).unwrap());
     }
 
     #[test]
@@ -1038,8 +1081,8 @@ mod tests {
         for i in 0..32 {
             witness.push((y >> i) & 1);
         }
-        let proof = prove(pred, &witness, &[x ^ y], &params).unwrap();
-        assert!(verify(&proof, &[x ^ y], &params).unwrap());
+        let proof = prove(pred.clone(), &witness, &[x ^ y], &params).unwrap();
+        assert!(verify_predicate(&pred, &proof, &[x ^ y], &params).unwrap());
     }
 
     #[test]
@@ -1053,8 +1096,8 @@ mod tests {
     fn test_wrong_public_inputs_rejected() {
         let params = fast_params();
         let pred = Predicate::AdditionCheck { expected_sum: 7 };
-        let proof = prove(pred, &[3, 4], &[7], &params).unwrap();
-        assert!(verify(&proof, &[8], &params).is_err());
+        let proof = prove(pred.clone(), &[3, 4], &[7], &params).unwrap();
+        assert!(verify_predicate(&pred, &proof, &[8], &params).is_err());
     }
 
     #[test]
@@ -1079,20 +1122,20 @@ mod tests {
         let mul_pred = Predicate::MultiplicationCheck {
             expected_product: 12,
         };
-        let mul_proof = prove(mul_pred, &[3, 4], &[12], &params).unwrap();
+        let mul_proof = prove(mul_pred.clone(), &[3, 4], &[12], &params).unwrap();
         let mul_bytes = bincode::serialize(&mul_proof).unwrap();
         let mul_roundtrip: Proof = bincode::deserialize(&mul_bytes).unwrap();
         assert!(
-            verify(&mul_roundtrip, &[12], &params).unwrap(),
+            verify_predicate(&mul_pred, &mul_roundtrip, &[12], &params).unwrap(),
             "deserialized MultiplicationCheck proof must verify"
         );
 
         let add_pred = Predicate::AdditionCheck { expected_sum: 7 };
-        let add_proof = prove(add_pred, &[3, 4], &[7], &params).unwrap();
+        let add_proof = prove(add_pred.clone(), &[3, 4], &[7], &params).unwrap();
         let add_bytes = bincode::serialize(&add_proof).unwrap();
         let add_roundtrip: Proof = bincode::deserialize(&add_bytes).unwrap();
         assert!(
-            verify(&add_roundtrip, &[7], &params).unwrap(),
+            verify_predicate(&add_pred, &add_roundtrip, &[7], &params).unwrap(),
             "deserialized AdditionCheck proof must verify"
         );
     }
@@ -1107,8 +1150,8 @@ mod tests {
 
         let proof = tree.prove_membership(3);
         let witness = set_membership_witness(&proof);
-        let compiled_proof = prove(pred, &witness, &[root], &params).unwrap();
-        assert!(verify(&compiled_proof, &[root], &params).unwrap());
+        let compiled_proof = prove(pred.clone(), &witness, &[root], &params).unwrap();
+        assert!(verify_predicate(&pred, &compiled_proof, &[root], &params).unwrap());
     }
 
     /// Construct the full witness for SetMembership from a MerkleProof.
@@ -1155,8 +1198,8 @@ mod tests {
         let params = fast_params();
         let pred = Predicate::RangeCheck { lo: 0, hi: 1000 };
         let witness = range_witness(500, 0, 1000);
-        let proof = prove(pred, &witness, &[0, 1000], &params).unwrap();
-        assert!(verify(&proof, &[0, 1000], &params).unwrap());
+        let proof = prove(pred.clone(), &witness, &[0, 1000], &params).unwrap();
+        assert!(verify_predicate(&pred, &proof, &[0, 1000], &params).unwrap());
     }
 
     #[test]
@@ -1164,8 +1207,8 @@ mod tests {
         let params = fast_params();
         let pred = Predicate::RangeCheck { lo: 0, hi: 1000 };
         let witness = range_witness(0, 0, 1000);
-        let proof = prove(pred, &witness, &[0, 1000], &params).unwrap();
-        assert!(verify(&proof, &[0, 1000], &params).unwrap());
+        let proof = prove(pred.clone(), &witness, &[0, 1000], &params).unwrap();
+        assert!(verify_predicate(&pred, &proof, &[0, 1000], &params).unwrap());
     }
 
     #[test]
@@ -1173,8 +1216,8 @@ mod tests {
         let params = fast_params();
         let pred = Predicate::RangeCheck { lo: 0, hi: 1000 };
         let witness = range_witness(1000, 0, 1000);
-        let proof = prove(pred, &witness, &[0, 1000], &params).unwrap();
-        assert!(verify(&proof, &[0, 1000], &params).unwrap());
+        let proof = prove(pred.clone(), &witness, &[0, 1000], &params).unwrap();
+        assert!(verify_predicate(&pred, &proof, &[0, 1000], &params).unwrap());
     }
 
     #[test]
@@ -1190,13 +1233,13 @@ mod tests {
         let params = ProofParams::balanced();
         let pred = Predicate::RangeCheck { lo: 0, hi: 1000 };
         let witness = range_witness(500, 0, 1000);
-        let proof = prove(pred, &witness, &[0, 1000], &params).unwrap();
+        let proof = prove(pred.clone(), &witness, &[0, 1000], &params).unwrap();
         let size = proof.serialized_size();
         println!(
             "Range proof size (balanced params, N=3 M=96): {} bytes",
             size
         );
-        assert!(verify(&proof, &[0, 1000], &params).unwrap());
+        assert!(verify_predicate(&pred, &proof, &[0, 1000], &params).unwrap());
     }
 
     // ── Compound predicate tests ──────────────────────────────────────────
@@ -1216,8 +1259,8 @@ mod tests {
         let root = tree.root();
         let public_inputs = vec![0u32, 100, root];
 
-        let proof = prove_compound(compound, &witness, &public_inputs, &params).unwrap();
-        assert!(verify(&proof, &public_inputs, &params).unwrap());
+        let proof = prove_compound(compound.clone(), &witness, &public_inputs, &params).unwrap();
+        assert!(verify_compound(&compound, &proof, &public_inputs, &params).unwrap());
     }
 
     #[test]
@@ -1232,13 +1275,13 @@ mod tests {
         let root = tree.root();
         let public_inputs = vec![0u32, 100, root];
 
-        let proof = prove_compound(compound, &witness, &public_inputs, &params).unwrap();
+        let proof = prove_compound(compound.clone(), &witness, &public_inputs, &params).unwrap();
         let size = proof.serialized_size();
         println!(
             "Compound proof size (balanced params, N=3 M=96): {} bytes",
             size
         );
-        assert!(verify(&proof, &public_inputs, &params).unwrap());
+        assert!(verify_compound(&compound, &proof, &public_inputs, &params).unwrap());
     }
 
     #[test]
@@ -1284,14 +1327,16 @@ mod tests {
         // Prove with member set A
         let proof = prove_compound(compound_a, &witness, &public_inputs_a, &params).unwrap();
 
-        // Try to verify with a DIFFERENT member set B (different root)
+        // Verify with a DIFFERENT member set B (different root)
         let members_b = vec![5u32, 15, 25, 42];
         let tree_b = crate::merkle::MerkleTree::build(&members_b);
         let root_b = tree_b.root();
         let public_inputs_b = vec![0u32, 100, root_b];
 
-        // Verify should fail: proof is bound to root_a, not root_b
-        assert!(verify(&proof, &public_inputs_b, &params).is_err());
+        // Verify should fail: the proof is bound to root_a's circuit, not
+        // root_b's — verify_compound detects the circuit mismatch.
+        let compound_b = CompoundPredicate::range_and_membership(0, 100, members_b);
+        assert!(verify_compound(&compound_b, &proof, &public_inputs_b, &params).is_err());
     }
 
     // ── C-1 regression: opened-party multiset must be exactly {0..N}\{h} ──
@@ -1336,7 +1381,7 @@ mod tests {
             let mut forged = proof;
             forged.repetitions[0].opened_views =
                 vec![orig[0].clone(), orig[0].clone()];
-            let result = verify(&forged, &[7], &params);
+            let result = verify_unchecked(&forged, &[7], &params);
             assert!(
                 result.is_err(),
                 "A: duplicated opened party must be rejected (hidden = {hidden})"
@@ -1358,7 +1403,7 @@ mod tests {
 
             let mut forged = proof;
             forged.repetitions[0].opened_views = vec![orig[0].clone(), relabeled];
-            let result = verify(&forged, &[7], &params);
+            let result = verify_unchecked(&forged, &[7], &params);
             assert!(
                 result.is_err(),
                 "B: omitted non-hidden party must be rejected (hidden = {hidden})"
@@ -1378,7 +1423,7 @@ mod tests {
 
             let mut forged = proof;
             forged.repetitions[0].opened_views = vec![orig[0].clone(), oor];
-            let result = verify(&forged, &[7], &params);
+            let result = verify_unchecked(&forged, &[7], &params);
             assert!(
                 result.is_err(),
                 "C: out-of-range opened party must be rejected (hidden = {hidden})"
@@ -1398,7 +1443,7 @@ mod tests {
 
             let mut forged = proof;
             forged.repetitions[0].opened_views = vec![orig[0].clone(), as_opened];
-            let result = verify(&forged, &[7], &params);
+            let result = verify_unchecked(&forged, &[7], &params);
             assert!(
                 result.is_err(),
                 "D: hidden party claimed as opened must be rejected (hidden = {hidden})"
@@ -1413,14 +1458,14 @@ mod tests {
             let orig = proof.repetitions[0].opened_views.clone();
 
             // Sanity: unmodified proof verifies.
-            assert!(verify(&proof, &[7], &params).unwrap());
+            assert!(verify_unchecked(&proof, &[7], &params).unwrap());
 
             // E: same set, different order — verification is order-independent.
             let mut reordered = proof;
             reordered.repetitions[0].opened_views =
                 vec![orig[1].clone(), orig[0].clone()];
             assert!(
-                verify(&reordered, &[7], &params).unwrap(),
+                verify_unchecked(&reordered, &[7], &params).unwrap(),
                 "E: valid permutation of the opened set must still verify"
             );
         }
@@ -1467,8 +1512,8 @@ mod tests {
         let x = 1u32 << 30;
         let pred = Predicate::RangeCheck { lo, hi };
         let witness = range_witness(x, lo, hi);
-        let proof = prove(pred, &witness, &[lo, hi], &params).unwrap();
-        assert!(verify(&proof, &[lo, hi], &params).unwrap());
+        let proof = prove(pred.clone(), &witness, &[lo, hi], &params).unwrap();
+        assert!(verify_predicate(&pred, &proof, &[lo, hi], &params).unwrap());
     }
 
     // ── C-3 regression: And binds both sub-predicates to the same value ───
@@ -1552,7 +1597,7 @@ mod tests {
         honest.extend(set_membership_witness(&tree.prove_membership(3)));
         honest.extend(range_witness(42, 40, 44));
         let proof = prove_compound(compound.clone(), &honest, &public_inputs, &params).unwrap();
-        assert!(verify(&proof, &public_inputs, &params).unwrap());
+        assert!(verify_compound(&compound, &proof, &public_inputs, &params).unwrap());
 
         // Decoupled variants must all be unprovable:
         //   range=50 vs membership=42 vs tail-range=42
@@ -1780,7 +1825,7 @@ mod tests {
         // Balanced params: per-proof acceptance probability 3^{-96} ≈ 4.6e-46.
         let balanced = ProofParams::balanced();
         let forged = forge_padded_index_proof(&balanced);
-        let result = verify(&forged, &[root], &balanced);
+        let result = verify_unchecked(&forged, &[root], &balanced);
         assert!(
             !matches!(result, Ok(true)),
             "manually forged padded-index proof must not verify (balanced params)"
@@ -1792,7 +1837,7 @@ mod tests {
         for attempt in 0..5 {
             let f = forge_padded_index_proof(&fast);
             assert!(
-                !matches!(verify(&f, &[root], &fast), Ok(true)),
+                !matches!(verify_unchecked(&f, &[root], &fast), Ok(true)),
                 "forged attempt {attempt} must not verify"
             );
         }
@@ -1827,7 +1872,7 @@ mod tests {
             touched,
             "expected the residual party to be opened in at least one repetition"
         );
-        let result = verify(&proof, &[root], &params);
+        let result = verify_unchecked(&proof, &[root], &params);
         assert!(result.is_err(), "tampered leaf_index share must cause rejection");
     }
 
@@ -1845,7 +1890,7 @@ mod tests {
         let params = params.clone();
         let r = std::panic::catch_unwind(move || {
             let p = make();
-            verify(&p, &pi, &params)
+            verify_unchecked(&p, &pi, &params)
         });
         match r {
             Ok(Ok(true)) => panic!("H2 [{label}]: malformed proof was ACCEPTED"),
@@ -1888,11 +1933,12 @@ mod tests {
         let params = fast_params();
 
         let pred_add = Predicate::AdditionCheck { expected_sum: 7 };
-        assert!(verify(&prove(pred_add, &[3, 4], &[7], &params).unwrap(), &[7], &params).unwrap());
+        let pa = prove(pred_add.clone(), &[3, 4], &[7], &params).unwrap();
+        assert!(verify_predicate(&pred_add, &pa, &[7], &params).unwrap());
 
         let pred_mul = Predicate::MultiplicationCheck { expected_product: 12 };
-        let pm = prove(pred_mul, &[3, 4], &[12], &params).unwrap();
-        assert!(verify(&pm, &[12], &params).unwrap());
+        let pm = prove(pred_mul.clone(), &[3, 4], &[12], &params).unwrap();
+        assert!(verify_predicate(&pred_mul, &pm, &[12], &params).unwrap());
 
         let x = 0b1010u32;
         let y = 0b1100u32;
@@ -1904,19 +1950,19 @@ mod tests {
             w.push((y >> i) & 1);
         }
         let px = prove(Predicate::XorCheck { expected_xor: x ^ y }, &w, &[x ^ y], &params).unwrap();
-        assert!(verify(&px, &[x ^ y], &params).unwrap());
+        assert!(verify_predicate(&Predicate::XorCheck { expected_xor: x ^ y }, &px, &[x ^ y], &params).unwrap());
 
         let members = f1_members();
         let tree = crate::merkle::MerkleTree::build(&members);
         let root = tree.root();
         let pw = prove(
-            Predicate::SetMembership { members },
+            Predicate::SetMembership { members: members.clone() },
             &set_membership_witness(&tree.prove_membership(1)),
             &[root],
             &params,
         )
         .unwrap();
-        assert!(verify(&pw, &[root], &params).unwrap());
+        assert!(verify_predicate(&Predicate::SetMembership { members }, &pw, &[root], &params).unwrap());
 
         let pr = prove(
             Predicate::RangeCheck { lo: 0, hi: 1000 },
@@ -1925,12 +1971,12 @@ mod tests {
             &params,
         )
         .unwrap();
-        assert!(verify(&pr, &[0, 1000], &params).unwrap());
+        assert!(verify_predicate(&Predicate::RangeCheck { lo: 0, hi: 1000 }, &pr, &[0, 1000], &params).unwrap());
 
         // Serialized roundtrip (the realistic networked path).
         let bytes = bincode::serialize(&pr).unwrap();
         let rt: Proof = bincode::deserialize(&bytes).unwrap();
-        assert!(verify(&rt, &[0, 1000], &params).unwrap());
+        assert!(verify_predicate(&Predicate::RangeCheck { lo: 0, hi: 1000 }, &rt, &[0, 1000], &params).unwrap());
     }
 
     #[test]
@@ -2274,7 +2320,9 @@ mod tests {
         // JSON is used as the carrier because bincode pre-allocates vectors
         // from untrusted length headers and can abort inside the
         // deserializer itself — that is a separate hardening item, not part
-        // of verify().
+        // of verify_unchecked(). Mutants may corrupt the embedded circuit,
+        // so this property test runs against the internal `verify_unchecked`
+        // primitive to exercise the structural validator itself.
         let params = fast_params();
         let proof = prove(
             Predicate::RangeCheck { lo: 0, hi: 1000 },
@@ -2286,7 +2334,7 @@ mod tests {
 
         // Untouched roundtrip verifies.
         let clean = serde_json::to_string(&proof).unwrap();
-        assert!(verify(&serde_json::from_str::<Proof>(&clean).unwrap(), &[0, 1000], &params).unwrap());
+        assert!(verify_predicate(&Predicate::RangeCheck { lo: 0, hi: 1000 }, &serde_json::from_str::<Proof>(&clean).unwrap(), &[0, 1000], &params).unwrap());
 
         // xorshift64* — deterministic, no external rng dependency drift.
         let mut state: u64 = 0x243F_6A88_85A3_08D3;
@@ -2315,7 +2363,7 @@ mod tests {
             let r = std::panic::catch_unwind(move || {
                 let text = std::str::from_utf8(&mutated).ok()?;
                 let p: Proof = serde_json::from_str(text).ok()?;
-                Some(verify(&p, &[0, 1000], params_ref).is_ok())
+                Some(verify_unchecked(&p, &[0, 1000], params_ref).is_ok())
             });
             match r {
                 Err(_) => panics += 1,

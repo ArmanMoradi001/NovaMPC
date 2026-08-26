@@ -31,6 +31,6 @@ pub mod tx_validation;
 pub use error::MpcithError;
 pub use params::ProofParams;
 pub use predicate::{Predicate, CompoundPredicate};
-pub use proof::{Proof, prove, prove_compound, verify, verify_compound, verify_predicate};
+pub use proof::{Proof, prove, prove_compound, verify_compound, verify_predicate};
 
 pub type Result<T> = std::result::Result<T, MpcithError>;

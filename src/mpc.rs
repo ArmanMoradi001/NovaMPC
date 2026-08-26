@@ -395,7 +395,7 @@ pub fn recompute_linear_shares(
 /// wire.  AssertEq gates are checked for per-party linear consistency here
 /// (output share == input share); the actual assertion against the gate's
 /// public `expected` constant is a value-level check performed once per
-/// repetition in `proof::verify()` (see `RepetitionProof::assert_shares`).
+/// repetition in `proof::verify_unchecked()` (see `RepetitionProof::assert_shares`).
 pub fn verify_party_view(
     circuit: &Circuit,
     wire_shares: &[u32],
@@ -478,7 +478,7 @@ pub fn verify_party_view(
                 // *value-level* property that cannot be checked from a
                 // single party's share alone (this party's opened share is
                 // only one of N additive shares); that check is performed
-                // in `proof::verify()` via `RepetitionProof::assert_shares`,
+                // in `proof::verify_unchecked()` via `RepetitionProof::assert_shares`,
                 // which sums ALL N parties' shares (including the hidden
                 // party's, bound into the Fiat-Shamir transcript before the
                 // challenge is drawn) and compares against the gate's

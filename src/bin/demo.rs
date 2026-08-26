@@ -1,6 +1,6 @@
 //! Demo binary: exercises all predicates and prints proof statistics.
 
-use mpcith_zk::{prove, verify, Predicate, ProofParams};
+use mpcith_zk::{prove, verify_predicate, Predicate, ProofParams};
 
 fn separator(title: &str) {
     println!("\n{}", "═".repeat(60));
@@ -17,7 +17,7 @@ fn run_demo(label: &str, predicate: Predicate, witness: &[u32], public_inputs: &
     println!("  Params:        N={}, M={}", params.num_parties, params.num_repetitions);
 
     let t_prove = Instant::now();
-    let proof = match prove(predicate, witness, public_inputs, params) {
+    let proof = match prove(predicate.clone(), witness, public_inputs, params) {
         Ok(p) => p,
         Err(e) => {
             println!("  ✗ Prove failed: {}", e);
@@ -29,7 +29,9 @@ fn run_demo(label: &str, predicate: Predicate, witness: &[u32], public_inputs: &
     let proof_bytes = proof.serialized_size();
 
     let t_verify = Instant::now();
-    let valid = verify(&proof, public_inputs, params).unwrap_or(false);
+    // Predicate-bound verification: binds the proof to the expected circuit,
+    // so a substituted/tautological circuit can never be accepted.
+    let valid = verify_predicate(&predicate, &proof, public_inputs, params).unwrap_or(false);
     let verify_ms = t_verify.elapsed().as_millis();
 
     println!("  Proof size:    {} bytes ({:.1} KB)", proof_bytes, proof_bytes as f64 / 1024.0);

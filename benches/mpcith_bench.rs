@@ -5,7 +5,8 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use mpcith_zk::merkle::MerkleTree;
 use mpcith_zk::{
-    prove, prove_compound, verify, CompoundPredicate, Predicate, ProofParams,
+    prove, prove_compound, verify_compound, verify_predicate, CompoundPredicate, Predicate,
+    ProofParams,
 };
 
 fn bench_prove(c: &mut Criterion) {
@@ -50,12 +51,16 @@ fn bench_verify(c: &mut Criterion) {
             &params,
         )
         .unwrap();
+        let pred = Predicate::AdditionCheck { expected_sum: 7 };
 
         group.bench_with_input(
             BenchmarkId::new("addition", label),
             &(proof, params.clone()),
             |b, (proof, params)| {
-                b.iter(|| verify(black_box(proof), black_box(&[7u32]), params).unwrap());
+                b.iter(|| {
+                    verify_predicate(black_box(&pred), black_box(proof), black_box(&[7u32]), params)
+                        .unwrap()
+                });
             },
         );
     }
@@ -224,10 +229,12 @@ fn bench_compound_predicate(c: &mut Criterion) {
         &params,
     )
     .unwrap();
+    let compound = CompoundPredicate::range_and_membership(0, 1000, members.clone());
 
     group.bench_function("verify", |b| {
         b.iter(|| {
-            verify(black_box(&proof), black_box(&public_inputs), &params).unwrap();
+            verify_compound(black_box(&compound), black_box(&proof), black_box(&public_inputs), &params)
+                .unwrap();
         });
     });
 
@@ -281,7 +288,13 @@ fn bench_by_param_set(c: &mut Criterion) {
                     total += start.elapsed();
                     proof_size_add = p.serialized_size();
                     let vstart = std::time::Instant::now();
-                    verify(black_box(&p), black_box(&public_add), params).unwrap();
+                    verify_predicate(
+                        black_box(&Predicate::AdditionCheck { expected_sum: 7 }),
+                        black_box(&p),
+                        black_box(&public_add),
+                        params,
+                    )
+                    .unwrap();
                     verify_time_add = vstart.elapsed();
                     prove_time_add = total / (iters as u32);
                 }
@@ -341,7 +354,17 @@ fn bench_by_param_set(c: &mut Criterion) {
                     total += start.elapsed();
                     proof_size_cmp = p.serialized_size();
                     let vstart = std::time::Instant::now();
-                    verify(black_box(&p), black_box(&public_inputs), params).unwrap();
+                    verify_compound(
+                        black_box(&CompoundPredicate::range_and_membership(
+                            0,
+                            1000,
+                            members.clone(),
+                        )),
+                        black_box(&p),
+                        black_box(&public_inputs),
+                        params,
+                    )
+                    .unwrap();
                     verify_time_cmp = vstart.elapsed();
                     prove_time_cmp = total / (iters as u32);
                 }

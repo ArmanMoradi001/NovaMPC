@@ -131,7 +131,8 @@ pub fn create_transaction_proof(
 /// context hash), independently recompiles the expected
 /// `RangeCheck ∧ SetMembership` circuit from the statement's public fields
 /// (`amount_range`, `authorized_set_root`, `merkle_depth`) and checks that
-/// the proof's circuit hash matches before delegating to `proof::verify()`.
+/// the proof's circuit hash matches before delegating to
+/// `proof::verify_unchecked()` (the crate-internal transcript verifier).
 ///
 /// This check is critical: without it a malicious prover can submit a trivial
 /// always-true circuit while claiming the correct `public_inputs`, bypassing
@@ -176,7 +177,7 @@ pub fn verify_transaction_proof(
     }
 
     let public_inputs = encode_public_inputs(statement);
-    proof::verify(proof, &public_inputs, params)
+    proof::verify_unchecked(proof, &public_inputs, params)
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────

@@ -113,9 +113,9 @@ cargo bench
 ### Basic Proof
 
 ```rust
-use mpcith_zk::{prove, verify, Predicate, ProofParams};
+use mpcith_zk::{prove, verify_predicate, Predicate, ProofParams};
 
-let params = ProofParams::default(); // N=16, M=38
+let params = ProofParams::balanced(); // N=3, M=96
 
 // Prove: 3 + 4 == 7 (witness is private)
 let proof = prove(
@@ -125,48 +125,74 @@ let proof = prove(
     &params,
 )?;
 
-// Verify: only needs public inputs
-assert!(verify(&proof, &[7u32], &params)?);
+// Verify: recompiles the predicate's circuit and binds verification to it.
+assert!(verify_predicate(&Predicate::AdditionCheck { expected_sum: 7 }, &proof, &[7u32], &params)?);
 ```
+
+> **Security note — always use a predicate-bound verifier.** The generic
+> transcript verifier (`proof::verify_unchecked`) is `pub(crate)`: it only
+> checks that `proof.circuit_hash` matches the circuit *embedded in the
+> proof*, so it would accept an honestly-generated proof of any trivially-true
+> (tautological) circuit. It is deliberately not exported. The public
+> verifiers — [`verify_predicate`](src/proof.rs), [`verify_compound`](src/proof.rs)
+> and [`tx_validation::verify_transaction_proof`](src/tx_validation.rs) —
+> independently recompile the intended predicate, hash the expected circuit,
+> and fail closed on mismatch before running any transcript checks.
 
 ### Compound Predicate
 
 ```rust
-use mpcith_zk::{prove_compound, verify, CompoundPredicate, Predicate, ProofParams};
+use mpcith_zk::{prove_compound, verify_compound, CompoundPredicate, ProofParams};
+use mpcith_zk::merkle::MerkleTree;
 
-let predicate = CompoundPredicate {
-    sub_predicates: vec![
-        Predicate::RangeCheck { lo: 0, hi: 1000 },
-        Predicate::SetMembership { members: vec![10, 20, 42, 100] },
-    ],
-};
+let members = vec![10u32, 20, 42, 100];
+let root = MerkleTree::build(&members).root();
 
-let params = ProofParams::default();
+// RangeCheck[0,1000] AND SetMembership(members), sharing one witness value.
+let predicate = CompoundPredicate::range_and_membership(0, 1000, members.clone());
+
+let params = ProofParams::balanced();
+let witness = predicate.generate_witness(42u32)?; // full circuit witness
 let proof = prove_compound(
     predicate,
-    &[42u32],        // private witness
-    &[0, 1000, 10, 20, 42, 100], // public inputs
+    &witness,
+    &[0, 1000, root], // public inputs: lo, hi, Merkle root
     &params,
 )?;
 
-assert!(verify(&proof, &[0, 1000, 10, 20, 42, 100], &params)?);
+assert!(verify_compound(
+    &CompoundPredicate::range_and_membership(0, 1000, members),
+    &proof,
+    &[0, 1000, root],
+    &params,
+)?);
 ```
 
 ### Transaction Validation
 
 ```rust
-use mpcith_zk::tx_validation::{generate_transaction_proof, verify_transaction_proof, TransactionStatement};
-
-let statement = TransactionStatement {
-    amount_range: (0, 1000),
-    authorized_set_root: 42,  // Merkle root of authorized accounts
-    merkle_depth: 4,
-    context: b"block-123".to_vec(),
-    members: vec![10, 20, 42, 100],
+use mpcith_zk::merkle::{MerkleTree, MerkleProof};
+use mpcith_zk::tx_validation::{
+    create_transaction_proof, verify_transaction_proof, TransactionStatement, TransactionWitness,
 };
 
-let proof = generate_transaction_proof(42u32, &statement, &ProofParams::default())?;
-assert!(verify_transaction_proof(&proof, &statement, &ProofParams::default())?);
+let members = vec![10u32, 20, 42, 100];
+let tree = MerkleTree::build(&members);
+let statement = TransactionStatement {
+    amount_range: (0, 1000),
+    authorized_set_root: tree.root(),
+    merkle_depth: members.len().next_power_of_two().trailing_zeros() as usize,
+    context: b"block-123".to_vec(),
+    members,
+};
+
+let witness = TransactionWitness {
+    secret_value: 42u32,
+    merkle_proof: tree.prove_membership(2),
+};
+
+let proof = create_transaction_proof(&statement, &witness, &mpcith_zk::ProofParams::balanced())?;
+assert!(verify_transaction_proof(&proof, &statement, &mpcith_zk::ProofParams::balanced())?);
 ```
 
 ## Predicates
@@ -232,6 +258,7 @@ Measured on a standard desktop (Rust release profile with LTO):
 
 - **No trusted setup**: all parameters are derived from public constants
 - **Post-quantum**: security relies on symmetric-key primitives, not discrete logarithms or factoring
+- **Circuit-substitution protection**: verification is bound to the intended predicate — the safe APIs (`verify_predicate`, `verify_compound`, `verify_transaction_proof`) independently recompile the expected circuit and fail closed if `proof.circuit_hash` does not match; the unchecked generic verifier is crate-private (`pub(crate)`)
 - **Fiat-Shamir**: non-interactive transformation via SHA3-256 hash function
 - **Replay protection**: transaction proofs bind to a `context` field (e.g., block hash) hashed into the Fiat-Shamir transcript
 - **Soundness tradeoff**: smaller N gives faster proofs but weaker soundness per repetition; larger M compensates

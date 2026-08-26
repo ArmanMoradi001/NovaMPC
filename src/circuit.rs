@@ -405,7 +405,7 @@ pub fn bit_decompose_on(builder: &mut CircuitBuilder, input_wire: usize, bit_wir
     // Assert sum == input_wire using pure arithmetic: (sum - input_wire) == 0.
     // mul_const(w, u32::MAX) computes -w mod 2^32 (since u32::MAX = -1 mod 2^32).
     // This avoids a Gate::Xor here, keeping reconstruction fully linear and
-    // correctly enforced via the assert_shares mechanism in proof::verify().
+    // correctly enforced via the assert_shares mechanism in proof::verify_unchecked().
     let neg_input = builder.mul_const(input_wire, u32::MAX);
     let diff = builder.add(sum, neg_input);
     builder.assert_eq(diff, 0);
