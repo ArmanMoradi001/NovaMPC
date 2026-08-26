@@ -1854,10 +1854,6 @@ mod tests {
         }
     }
 
-    fn h1_members() -> Vec<u32> {
-        vec![7u32, 8, 9] // pads to [7, 8, 9, 0]
-    }
-
     /// Re-derive the self-consistency fields after mutating the circuit so
     /// that the embedded-hash check passes and the structural validator is
     /// actually exercised (instead of bailing at the earlier check).

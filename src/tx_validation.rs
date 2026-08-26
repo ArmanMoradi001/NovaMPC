@@ -295,4 +295,62 @@ mod tests {
         let result = create_transaction_proof(&statement, &witness, &params);
         assert!(result.is_err(), "should reject unauthorized account");
     }
+
+    // ── F-6 regression: single-member authorized set (depth 0) ────────────
+
+    fn single_member_statement() -> TransactionStatement {
+        let members = vec![42u32];
+        let tree = MerkleTree::build(&members);
+        TransactionStatement {
+            amount_range: (0, 100),
+            authorized_set_root: tree.root(),
+            merkle_depth: members.len().next_power_of_two().trailing_zeros() as usize, // 0
+            context: b"block-7-single-member".to_vec(),
+            members,
+        }
+    }
+
+    #[test]
+    fn test_transaction_proof_single_member_valid() {
+        // members = [42], secret = 42 → create + verify MUST succeed.
+        let params = ProofParams::fast_insecure();
+        let statement = single_member_statement();
+
+        let witness = TransactionWitness {
+            secret_value: 42,
+            merkle_proof: MerkleTree::build(&statement.members).prove_membership(0),
+        };
+
+        let proof = create_transaction_proof(&statement, &witness, &params)
+            .expect("single-member transaction proof must be creatable");
+        let ok = verify_transaction_proof(&proof, &statement, &params)
+            .expect("verification must not error on depth-0 statements");
+        assert!(ok, "valid single-member proof MUST verify");
+    }
+
+    #[test]
+    fn test_transaction_proof_single_member_invalid_secret() {
+        // members = [42], secret = 43 → MUST fail.
+        let params = ProofParams::fast_insecure();
+        let statement = single_member_statement();
+
+        let witness = TransactionWitness {
+            secret_value: 43,
+            merkle_proof: MerkleTree::build(&statement.members).prove_membership(0),
+        };
+
+        let result = create_transaction_proof(&statement, &witness, &params);
+        assert!(result.is_err(), "43 ∉ {{42}} must not be provable");
+
+        // And a hand-forged claim against the true root must also be
+        // unprovable end-to-end.
+        let mut forged_witness = witness.clone();
+        forged_witness.secret_value = 43;
+        if let Ok(proof) = create_transaction_proof(&statement, &forged_witness, &params) {
+            assert!(
+                !matches!(verify_transaction_proof(&proof, &statement, &params), Ok(true)),
+                "forged single-member proof must not verify"
+            );
+        }
+    }
 }

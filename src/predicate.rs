@@ -652,21 +652,26 @@ fn compile_set_membership(members: &[u32]) -> crate::Result<CompiledPredicate> {
 /// true `members.len()` of the set the root was built from: it is baked
 /// into the F-1 index-bound constraint, so a wrong count yields a
 /// different circuit hash and fails closed at verification time.
+///
+/// Depth-0 sets (a single member) are fully supported with semantics
+/// identical to [`compile_set_membership`]: the tree is a bare leaf, so
+/// there are no bit/path/hash gates and the circuit is exactly
+/// `AssertEq(leaf == root)`. This is sound by construction — any accepting
+/// proof forces the witness equal to the sole public member — and keeps
+/// the prover/verification compilers symmetric for every depth.
 fn compile_set_membership_from_root(
     root: u32,
     depth: usize,
     num_members: usize,
 ) -> crate::Result<CompiledPredicate> {
-    if depth == 0 {
-        return Err(crate::MpcithError::InvalidParams(
-            "Set membership depth must be at least 1".into(),
-        ));
-    }
     if depth >= 32 {
         return Err(crate::MpcithError::InvalidParams(format!(
             "Set membership supports at most 2^31 members (got depth {depth})"
         )));
     }
+    // For depth 0 this admits exactly num_members == 1: a one-element set
+    // has a single-leaf tree whose root IS that member. The circuit built
+    // below degenerates to `leaf == root` with no path elements.
     if num_members == 0 || num_members > (1usize << depth) {
         return Err(crate::MpcithError::InvalidParams(format!(
             "Member count {num_members} inconsistent with tree depth {depth}"
@@ -1271,5 +1276,124 @@ mod tests {
             .err()
             .expect("depth 40 must be rejected");
         assert!(matches!(err, crate::MpcithError::InvalidParams(_)));
+    }
+
+    // ── F-6 regression: symmetric depth-0 (single-member) semantics ───────
+
+    #[test]
+    fn test_f6_depth0_circuit_is_leaf_eq_root_and_symmetric() {
+        let members = vec![42u32];
+        let tree = MerkleTree::build(&members);
+        assert_eq!(tree.root(), 42, "single-leaf tree root must be the member");
+
+        // Prover-side circuit: leaf == root, no hash/path gates.
+        let prover = Predicate::SetMembership { members: members.clone() }
+            .compile()
+            .unwrap();
+        assert_eq!(prover.circuit.gates.len(), 1);
+        assert!(matches!(
+            prover.circuit.gates[0],
+            Gate::AssertEq { input: 0, expected: 42, .. }
+        ));
+
+        // Verification-side compiler must produce a hash-equal circuit.
+        let verifier = compile_set_membership_from_root(tree.root(), 0, 1).unwrap();
+        assert_eq!(
+            crate::fiat_shamir::hash_circuit(&prover.circuit),
+            crate::fiat_shamir::hash_circuit(&verifier.circuit),
+            "depth-0 circuits from both compilers must be identical"
+        );
+        // And through the compound paths used by transaction verification.
+        let cp = CompoundPredicate::range_and_membership(0, 100, members.clone())
+            .compile()
+            .unwrap();
+        let cv = CompoundPredicate::range_and_membership_for_verify(0, 100, tree.root(), 0, 1)
+            .unwrap();
+        assert_eq!(
+            crate::fiat_shamir::hash_circuit(&cp.circuit),
+            crate::fiat_shamir::hash_circuit(&cv.circuit),
+            "depth-0 compound circuits must match across compilers"
+        );
+
+        // Circuit semantics: the member satisfies it; any other value fails.
+        compiled_eval_ok(&prover.circuit, &[42u32, 0]);
+        assert!(prover.circuit.evaluate(&[43u32, 0]).is_err());
+    }
+
+    /// Build the canonical single-member witness and evaluate.
+    fn compiled_eval_ok(circuit: &Circuit, w: &[u32]) {
+        circuit
+            .evaluate(w)
+            .unwrap_or_else(|e| panic!("depth-0 honest witness must satisfy circuit: {e}"));
+    }
+
+    #[test]
+    fn test_f6_depth0_end_to_end_prove_verify() {
+        // members = [42], secret = 42 → prove + verify MUST succeed.
+        let params = crate::params::ProofParams::fast_insecure();
+        let members = vec![42u32];
+        let pred = Predicate::SetMembership { members: members.clone() };
+        let tree = MerkleTree::build(&members);
+        let root = tree.root();
+
+        let w = set_membership_witness_vec(&tree.prove_membership(0));
+        assert_eq!(w.len(), 2, "depth-0 witness is exactly [leaf, index]");
+
+        let proof = crate::prove(pred.clone(), &w, &[root], &params)
+            .unwrap_or_else(|e| panic!("single-member membership proof must exist: {e}"));
+        assert!(
+            crate::verify_predicate(&pred, &proof, &[root], &params).unwrap(),
+            "single-member membership proof must verify"
+        );
+    }
+
+    #[test]
+    fn test_f6_depth0_wrong_secret_rejected_end_to_end() {
+        // members = [42], secret = 43 → MUST fail at every level.
+        let params = crate::params::ProofParams::fast_insecure();
+        let members = vec![42u32];
+        let tree = MerkleTree::build(&members);
+        let root = tree.root();
+        let pred = Predicate::SetMembership { members };
+
+        // generate_witness refuses non-members outright.
+        assert!(pred.generate_witness(43).is_err());
+
+        // A hand-crafted witness for 43 cannot satisfy the circuit...
+        assert!(crate::prove(pred.clone(), &[43u32, 0], &[43], &params).is_err());
+        // ...and even against the TRUE public root the claim fails.
+        assert!(crate::prove(pred, &[43u32, 0], &[root], &params).is_err());
+    }
+
+    #[test]
+    fn test_f6_depth0_compound_end_to_end_prove_verify() {
+        // Compound RangeCheck ∧ SetMembership over a one-element set,
+        // proven with the compound API and verified through the
+        // independently-compiled verification circuit.
+        let params = crate::params::ProofParams::fast_insecure();
+        let members = vec![42u32];
+        let compound = CompoundPredicate::range_and_membership(0, 100, members.clone());
+        let witness = compound.generate_witness(42).unwrap();
+        let public_inputs = vec![0u32, 100, MerkleTree::build(&members).root()];
+        let proof = crate::prove_compound(compound.clone(), &witness, &public_inputs, &params)
+            .expect("single-member compound proof must exist");
+        assert!(
+            crate::verify_compound(&compound, &proof, &public_inputs, &params).unwrap(),
+            "single-member compound proof must verify"
+        );
+
+        // Decoy value outside the range but inside nothing: unprovable.
+        assert!(compound.generate_witness(43).is_err());
+    }
+
+    #[test]
+    fn test_f6_depth0_count_mismatch_still_fail_closed() {
+        // depth 0 admits exactly one member; anything else must be rejected.
+        for bad in [0usize, 2, 5] {
+            let err = compile_set_membership_from_root(42, 0, bad)
+                .err()
+                .expect("inconsistent count/depth must be rejected");
+            assert!(matches!(err, crate::MpcithError::InvalidParams(_)));
+        }
     }
 }
