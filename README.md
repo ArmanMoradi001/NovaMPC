@@ -278,4 +278,18 @@ Measured on a standard desktop (Rust release profile with LTO):
 
 ## License
 
-MIT — see [LICENSE](LICENSE) for details.
+© 2026 Arman Moradi. All Rights Reserved.
+
+This repository contains original research code and materials developed by Arman Moradi.
+
+**No license is granted for the use, reproduction, modification, distribution, publication, or incorporation of this code or any substantial portion of it into other projects without prior written permission from the copyright holder.**
+
+If you wish to use this work for academic research, education, commercial purposes, benchmarking, publication, or any other purpose beyond viewing the repository on GitHub, please contact the copyright holder and obtain written permission first.
+
+see [LICENSE](LICENSE) for details.
+
+
+
+
+
+
