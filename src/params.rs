@@ -16,8 +16,9 @@ pub struct ProofParams {
 }
 
 impl ProofParams {
-    /// Conservative parameters: N=3, M=64 → soundness ≈ 2^{-101}.
-    /// Larger proofs, simpler code (ZKBoo-style).
+    /// Prototype parameters: N=3, M=64 → soundness ≈ 2^{-37} (M·log₂(3/2)).
+    /// Larger proofs than `fast_insecure`, but still below 128-bit security;
+    /// suitable for tests and demos, not production.
     pub fn low_n() -> Self {
         Self {
             num_parties: 3,
@@ -26,14 +27,20 @@ impl ProofParams {
         }
     }
 
-    /// Balanced parameters: N=3, M=96 → soundness ≈ 2^{-152} (M·log₂3).
-    /// The protocol requires exactly 3 parties (ZKBoo verifiable
-    /// multiplication), so the previous N=16/M=38 set is rebalanced to N=3.
+    /// Balanced prototype parameters: N=3, M=96 → soundness ≈ 2^{-56}
+    /// (M·log₂(3/2)).
+    /// The protocol requires exactly 3 parties (ZKBoo 2-of-3 opening, per-rep
+    /// error 2/3). A full 152-bit level would need M=260 repetitions; M=96 is
+    /// kept as a practical demonstrator trade-off, not a 152-bit target.
     pub fn balanced() -> Self {
-        Self::for_soundness_bits(152.0, 3)
+        Self {
+            num_parties: 3,
+            num_repetitions: 96,
+            field_element_bytes: 4,
+        }
     }
 
-    /// Fast/test parameters: N=3, M=10 → soundness ≈ 2^{-16}.
+    /// Fast/test parameters: N=3, M=10 → soundness ≈ 2^{-6}.
     /// NOT secure, only for unit tests and benchmarks.
     pub fn fast_insecure() -> Self {
         Self {
@@ -43,11 +50,18 @@ impl ProofParams {
         }
     }
 
-    /// Compute the minimum M such that `M * log2(N) >= target_bits`,
+    /// Compute the minimum M such that `M * log2(N/(N-1)) >= target_bits`,
     /// then return a `ProofParams` with that M and the given N.
+    ///
+    /// The 2-of-3 ZKBoo opening lets a prover who forges one party's view
+    /// pass whenever the hidden party is the forged one or its predecessor
+    /// (2 of N outcomes), i.e. per-repetition error (N-1)/N for the N=3
+    /// configuration used here (2/3). Requires `num_parties >= 2`.
     pub fn for_soundness_bits(target_bits: f64, num_parties: usize) -> Self {
-        let log2_n = (num_parties as f64).log2();
-        let m = (target_bits / log2_n).ceil() as usize;
+        assert!(num_parties >= 2, "need at least 2 parties");
+        let log2_gain =
+            (num_parties as f64 / (num_parties - 1) as f64).log2();
+        let m = (target_bits / log2_gain).ceil() as usize;
         Self {
             num_parties,
             num_repetitions: m,
@@ -55,12 +69,12 @@ impl ProofParams {
         }
     }
 
-    /// 128-bit soundness with N=3: M=81 (instead of the old N=16/M=32 set).
+    /// 128-bit soundness with N=3: M=219 (per-rep error 2/3).
     pub fn secure_128() -> Self {
         Self::for_soundness_bits(128.0, 3)
     }
 
-    /// 100-bit soundness with N=3: M=64.
+    /// 100-bit soundness with N=3: M=171 (per-rep error 2/3).
     /// Suitable for internal/permissioned networks where the threat model
     /// is weaker than internet-scale adversaries.
     pub fn secure_100() -> Self {
@@ -69,9 +83,10 @@ impl ProofParams {
 
     /// Fabric-recommended parameters for a permissioned blockchain.
     ///
-    /// Uses N=3, M=64 (100-bit soundness). For a permissioned blockchain
-    /// with known, accountable validators, 100 bits of soundness against a
-    /// computationally bounded adversary is a reasonable and standard choice.
+    /// Uses N=3, M=171 (100-bit soundness at per-rep error 2/3). For a
+    /// permissioned blockchain with known, accountable validators, 100 bits
+    /// of soundness against a computationally bounded adversary is a
+    /// reasonable and standard choice.
     ///
     /// Reference: the Picnic specification (Chase et al., 2017) targets
     /// 128-bit post-quantum security for public-chain use. Permissioned
@@ -82,15 +97,19 @@ impl ProofParams {
         Self::secure_100()
     }
 
-    /// Compute soundness in bits: M * log2(N).
+    /// Compute soundness in bits: M * log2(N/(N-1)).
     ///
-    /// In each repetition the verifier opens N-1 of N party views.
-    /// A cheating prover fabricating one view per repetition is caught unless
-    /// the hidden party happens to be the fabricated one (probability 1/N).
-    /// Over M independent repetitions the soundness error is (1/N)^M,
-    /// giving M * log2(N) bits of security.
+    /// In each repetition the verifier opens N-1 of N party views. A cheating
+    /// prover who forges one party's view (including its commitment) escapes
+    /// detection whenever the hidden party is the forged one or its
+    /// predecessor's verifier-skipped share — 2 of N outcomes for this
+    /// 2-of-3 ZKBoo scheme, i.e. per-repetition error 2/3 at N=3.
+    /// Over M independent repetitions the soundness error is ((N-1)/N)^M,
+    /// giving M * log2(N/(N-1)) bits of security.
     pub fn soundness_bits(&self) -> f64 {
-        (self.num_repetitions as f64) * ((self.num_parties as f64).log2())
+        debug_assert!(self.num_parties >= 2);
+        let n = self.num_parties as f64;
+        (self.num_repetitions as f64) * ((n / (n - 1.0)).log2())
     }
 
     /// Approximate proof size in bytes (rough lower bound, no overhead).
@@ -121,7 +140,7 @@ impl ProofParams {
 }
 
 impl Default for ProofParams {
-    /// Defaults to balanced (N=3, M=96) for ≈2^{-152} soundness.
+    /// Defaults to balanced (N=3, M=96) for ≈2^{-56} soundness.
     fn default() -> Self {
         Self::balanced()
     }
@@ -135,7 +154,7 @@ mod tests {
     fn test_soundness_bits_fast_insecure() {
         let p = ProofParams::fast_insecure();
         let bits = p.soundness_bits();
-        let expected = 10.0 * (3.0_f64).log2();
+        let expected = 10.0 * (3.0_f64 / 2.0).log2();
         assert!((bits - expected).abs() < 1e-10,
             "fast_insecure: got {bits}, expected {expected}");
     }
@@ -144,7 +163,7 @@ mod tests {
     fn test_soundness_bits_balanced() {
         let p = ProofParams::balanced();
         let bits = p.soundness_bits();
-        let expected = 96.0 * (3.0_f64).log2();
+        let expected = 96.0 * (3.0_f64 / 2.0).log2();
         assert!((bits - expected).abs() < 1e-10,
             "balanced: got {bits}, expected {expected}");
     }
@@ -152,7 +171,7 @@ mod tests {
     #[test]
     fn test_for_soundness_bits_128() {
         let p = ProofParams::for_soundness_bits(128.0, 3);
-        assert_eq!(p.num_repetitions, 81);
+        assert_eq!(p.num_repetitions, 219);
         assert_eq!(p.num_parties, 3);
         assert!(p.soundness_bits() >= 128.0);
     }
@@ -160,7 +179,7 @@ mod tests {
     #[test]
     fn test_for_soundness_bits_100() {
         let p = ProofParams::for_soundness_bits(100.0, 3);
-        assert_eq!(p.num_repetitions, 64);
+        assert_eq!(p.num_repetitions, 171);
         assert_eq!(p.num_parties, 3);
         assert!(p.soundness_bits() >= 100.0);
     }
@@ -168,7 +187,7 @@ mod tests {
     #[test]
     fn test_for_soundness_bits_152() {
         let p = ProofParams::for_soundness_bits(152.0, 3);
-        assert_eq!(p.num_repetitions, 96);
+        assert_eq!(p.num_repetitions, 260);
         assert_eq!(p.num_parties, 3);
         assert!(p.soundness_bits() >= 152.0);
     }
@@ -178,6 +197,6 @@ mod tests {
         let p = ProofParams::secure_128();
         assert!(p.soundness_bits() >= 128.0);
         assert_eq!(p.num_parties, 3);
-        assert_eq!(p.num_repetitions, 81);
+        assert_eq!(p.num_repetitions, 219);
     }
 }

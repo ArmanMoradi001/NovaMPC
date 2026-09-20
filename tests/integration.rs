@@ -159,11 +159,16 @@ fn test_proof_sizes_table() {
     println!("{}", "-".repeat(80));
 
     for case in cases {
-        for (label, params) in &[
-            ("N=3 M=10", fast.clone()),
-            ("N=3 M=96", balanced.clone()),
-            ("N=3 M=64", fabric.clone()),
-        ] {
+        let param_sets: Vec<(String, ProofParams)> = [&fast, &balanced, &fabric]
+            .iter()
+            .map(|p| {
+                (
+                    format!("N={} M={}", p.num_parties, p.num_repetitions),
+                    (**p).clone(),
+                )
+            })
+            .collect();
+        for (label, params) in &param_sets {
             let t0 = Instant::now();
             let proof = prove(case.pred.clone(), &case.witness, &case.public, params).unwrap();
             let prove_ms = t0.elapsed().as_millis();
@@ -260,8 +265,9 @@ fn test_soundness_parameter_sweep() {
 
     for &n in &party_counts {
         for &m in &rep_counts {
-            // soundness ≈ (1/N)^M  →  bits = M * log2(N)
-            let bits = (m as f64) * ((n as f64).log2());
+            // soundness ≈ ((N-1)/N)^M  →  bits = M * log2(N/(N-1))
+            // (2-of-3 ZKBoo opening: per-rep error 2/3 at N=3).
+            let bits = (m as f64) * ((n as f64 / (n as f64 - 1.0)).log2());
             assert!(bits > 0.0, "soundness bits must be positive");
             println!("{:<6} {:<6} {:>12.2}", n, m, bits);
         }

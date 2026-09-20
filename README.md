@@ -209,11 +209,13 @@ assert!(verify_transaction_proof(&proof, &statement, &mpcith_zk::ProofParams::ba
 
 | Parameter Set | N (parties) | M (repetitions) | Soundness | Proof Size (Addition) |
 |---|---|---|---|---|
-| `fast_insecure()` | 3 | 10 | ≈ 2<sup>-16</sup> | ≈ 3 KB |
-| `low_n()` | 3 | 64 | ≈ 2<sup>-101</sup> | ≈ 18 KB |
-| `balanced()` | 16 | 38 | ≈ 2<sup>-152</sup> | ≈ 60 KB |
+| `fast_insecure()` | 3 | 10 | ≈ 2<sup>-6</sup> | ≈ 3 KB |
+| `low_n()` | 3 | 64 | ≈ 2<sup>-37</sup> | ≈ 18 KB |
+| `balanced()` | 3 | 96 | ≈ 2<sup>-56</sup> | ≈ 60 KB |
+| `secure_100()` / `fabric_recommended()` | 3 | 171 | ≈ 2<sup>-100</sup> | ≈ 107 KB |
+| `secure_128()` | 3 | 219 | ≈ 2<sup>-128</sup> | ≈ 137 KB |
 
-Soundness is computed as: `M × log₂(N / (N-1))` bits of security.
+Soundness is computed as: `M × log₂(N / (N-1))` bits of security (per-repetition error `(N-1)/N`, i.e. 2/3 at N=3 for the 2-of-3 ZKBoo opening).
 
 ## Benchmarks
 
@@ -223,9 +225,9 @@ Measured on a standard desktop (Rust release profile with LTO):
 
 | Predicate | Params | Prove | Verify | Proof Size | Soundness |
 |---|---|---|---|---|---|
-| AdditionCheck | fast_insecure | 0.31 ms | 0.20 ms | 2.9 KB | 15.8 bits |
-| AdditionCheck | low_n | 1.95 ms | 1.37 ms | 17.7 KB | 101.4 bits |
-| AdditionCheck | balanced | 6.49 ms | 7.44 ms | 59.9 KB | 152.0 bits |
+| AdditionCheck | fast_insecure | 0.31 ms | 0.20 ms | 2.9 KB | 5.8 bits |
+| AdditionCheck | low_n | 1.95 ms | 1.37 ms | 17.7 KB | 37.4 bits |
+| AdditionCheck | balanced | 6.49 ms | 7.44 ms | 59.9 KB | 56.1 bits |
 
 ### Set Membership (balanced params)
 
