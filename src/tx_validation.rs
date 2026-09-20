@@ -7,11 +7,12 @@
 //!
 //! # Replay protection
 //!
-//! The `context` field (e.g. block hash, channel ID) is hashed into a `u32`
-//! and appended to the public-inputs vector. Since public inputs are fed into
-//! the Fiat-Shamir transcript, a proof generated for block N cannot be replayed
-//! at block N+1 — the verifier would hash a different context, derive different
-//! challenges, and reject the proof.
+//! The `context` field (e.g. block hash, channel ID) is hashed with SHA3-256
+//! over a domain separator plus length prefix, and the full 32-byte digest
+//! (as eight `u32` words) is appended to the public-inputs vector. Since
+//! public inputs are fed into the Fiat-Shamir transcript, a proof generated
+//! for block N cannot be replayed at block N+1 — the verifier would hash a
+//! different context, derive different challenges, and reject the proof.
 
 use sha3::{Digest, Sha3_256};
 
@@ -66,31 +67,50 @@ pub struct TransactionWitness {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/// Hash arbitrary context bytes into a single `u32` for public-input binding.
+/// Domain separator for transaction-context hashing (H-4).
+const TX_CONTEXT_DOMAIN: &[u8] = b"mpcith-zk:tx-context:v1";
+
+/// Hash arbitrary context bytes to a full 32-byte digest for binding.
 ///
-/// Uses SHA3-256 and takes the first four bytes (little-endian) as a `u32`.
-fn hash_context_to_u32(context: &[u8]) -> u32 {
-    if context.is_empty() {
-        return 0;
+/// Uses SHA3-256 over `domain || len(context) as u64-LE || context`. The
+/// length prefix gives empty and non-empty contexts distinct encodings by
+/// construction (H-4); colliding two contexts requires a full SHA3-256
+/// collision, not a 32-bit one.
+fn hash_context_to_bytes(context: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha3_256::new();
+    hasher.update(TX_CONTEXT_DOMAIN);
+    hasher.update(&(context.len() as u64).to_le_bytes());
+    hasher.update(context);
+    hasher.finalize().into()
+}
+
+/// Hash arbitrary context bytes into eight `u32` words (little-endian) for
+/// public-input binding. Binds the full 256-bit digest (H-4).
+fn hash_context_to_words(context: &[u8]) -> [u32; 8] {
+    let bytes = hash_context_to_bytes(context);
+    let mut words = [0u32; 8];
+    for (i, w) in words.iter_mut().enumerate() {
+        *w = u32::from_le_bytes(bytes[4 * i..4 * i + 4].try_into().unwrap());
     }
-    let hash: [u8; 32] = Sha3_256::digest(context).into();
-    u32::from_le_bytes(hash[..4].try_into().unwrap())
+    words
 }
 
 /// Build the public-inputs vector from a transaction statement.
 ///
-/// Encoding: `[lo, hi, authorized_set_root, context_hash]`.
+/// Encoding: `[lo, hi, authorized_set_root, ctx_0, .., ctx_7]` where
+/// `ctx_*` are the eight `u32` words of `SHA3-256(domain || len || context)`.
 ///
 /// This encoding is fed into `derive_challenges` inside the Fiat-Shamir
-/// transform, so all four values are cryptographically bound to the proof.
+/// transform, so all values are cryptographically bound to the proof.
 fn encode_public_inputs(statement: &TransactionStatement) -> Vec<u32> {
     let (lo, hi) = statement.amount_range;
-    vec![
-        lo,
-        hi,
-        statement.authorized_set_root,
-        hash_context_to_u32(&statement.context),
-    ]
+    let ctx = hash_context_to_words(&statement.context);
+    let mut inputs = Vec::with_capacity(3 + ctx.len());
+    inputs.push(lo);
+    inputs.push(hi);
+    inputs.push(statement.authorized_set_root);
+    inputs.extend_from_slice(&ctx);
+    inputs
 }
 
 // ─── Core API ─────────────────────────────────────────────────────────────────
@@ -353,5 +373,72 @@ mod tests {
                 "forged single-member proof must not verify"
             );
         }
+    }
+
+    // ── H-4 regression: full 256-bit context binding ──────────────────────
+
+    #[test]
+    fn test_h4_context_binding_is_256_bits() {
+        // Public inputs must carry lo, hi, root plus all 8 context words.
+        let members = vec![10u32, 20, 500, 999];
+        let root = MerkleTree::build(&members).root();
+        let statement = TransactionStatement {
+            amount_range: (1, 1000),
+            authorized_set_root: root,
+            merkle_depth: 2,
+            context: b"block-42".to_vec(),
+            members,
+        };
+        let inputs = encode_public_inputs(&statement);
+        assert_eq!(inputs.len(), 3 + 8, "context must bind 8 words (256 bits)");
+        assert_eq!(&inputs[..3], &[1, 1000, root]);
+        assert_eq!(
+            &inputs[3..],
+            &hash_context_to_words(b"block-42")[..],
+            "trailing words must be the full context digest"
+        );
+    }
+
+    #[test]
+    fn test_h4_empty_context_is_distinct_and_deterministic() {
+        assert_eq!(
+            hash_context_to_words(b""),
+            hash_context_to_words(b""),
+            "context hashing must be deterministic"
+        );
+        assert_ne!(
+            hash_context_to_words(b""),
+            hash_context_to_words(b"\0"),
+            "empty context must not collide with a one-byte context by construction"
+        );
+        // Length prefix also separates values that only differ in length.
+        assert_ne!(
+            hash_context_to_words(b"block-4"),
+            hash_context_to_words(b"block-42"),
+            "different contexts must bind to different public inputs"
+        );
+    }
+
+    #[test]
+    fn test_h4_empty_context_proof_verifies_only_with_empty_context() {
+        let params = ProofParams::fast_insecure();
+        let members = vec![10u32, 20, 500, 999];
+        let tree = MerkleTree::build(&members);
+        let statement = TransactionStatement {
+            amount_range: (1, 1000),
+            authorized_set_root: tree.root(),
+            merkle_depth: 2,
+            context: Vec::new(),
+            members: members.clone(),
+        };
+        let witness = TransactionWitness {
+            secret_value: 500,
+            merkle_proof: tree.prove_membership(2),
+        };
+        let proof = create_transaction_proof(&statement, &witness, &params).unwrap();
+        assert!(verify_transaction_proof(&proof, &statement, &params).unwrap());
+        let mut other = statement.clone();
+        other.context = b"block-42".to_vec();
+        assert!(verify_transaction_proof(&proof, &other, &params).is_err());
     }
 }
