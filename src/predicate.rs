@@ -88,15 +88,27 @@ impl Predicate {
     }
 
     /// Number of private witness elements this predicate requires.
+    ///
+    /// Layouts (must match `circuit.num_inputs` of [`Predicate::compile`]):
+    /// - Addition/Multiplication: `[x, y]` (2).
+    /// - Xor: `[x, y]` plus 64 reserved bit wires (32 bits of `x`, 32 of `y`).
+    /// - RangeCheck: `[x, x_bits(32), shifted_bits(k), slack_bits(k)]` with
+    ///   `k = bits_needed(hi - lo)`.
+    /// - SetMembership: `[leaf, index, bit_0..bit_{d-1}, sib_0..sib_{d-1}]`
+    ///   with `d = log2(padded leaf count)`.
     pub fn witness_size(&self) -> usize {
         match self {
             Predicate::AdditionCheck { .. } => 2,
             Predicate::MultiplicationCheck { .. } => 2,
-            Predicate::XorCheck { .. } => 2,
-            Predicate::RangeCheck { .. } => 1,
+            Predicate::XorCheck { .. } => 2 + 64,
+            Predicate::RangeCheck { lo, hi } => {
+                let width = hi.wrapping_sub(*lo);
+                let k = bits_needed(width);
+                1 + 32 + k + k
+            }
             Predicate::SetMembership { members } => {
                 let depth = members.len().next_power_of_two().trailing_zeros() as usize;
-                2 + depth
+                2 + 2 * depth
             }
         }
     }
@@ -392,7 +404,7 @@ fn compile_xor_check(expected_xor: u32) -> crate::Result<CompiledPredicate> {
     Ok(CompiledPredicate {
         circuit,
         public_inputs: vec![expected_xor],
-        witness_size: 2,
+        witness_size: 2 + 64,
     })
 }
 
@@ -473,7 +485,7 @@ fn compile_range_check(lo: u32, hi: u32) -> crate::Result<CompiledPredicate> {
     Ok(CompiledPredicate {
         circuit,
         public_inputs: vec![lo, hi],
-        witness_size: 1,
+        witness_size: total_inputs,
     })
 }
 
@@ -640,7 +652,7 @@ fn compile_set_membership(members: &[u32]) -> crate::Result<CompiledPredicate> {
     Ok(CompiledPredicate {
         circuit,
         public_inputs: vec![root],
-        witness_size: 2 + depth,
+        witness_size: 2 + 2 * depth,
     })
 }
 
@@ -718,7 +730,7 @@ fn compile_set_membership_from_root(
     Ok(CompiledPredicate {
         circuit,
         public_inputs: vec![root],
-        witness_size: 2 + depth,
+        witness_size: 2 + 2 * depth,
     })
 }
 
@@ -1394,6 +1406,57 @@ mod tests {
                 .err()
                 .expect("inconsistent count/depth must be rejected");
             assert!(matches!(err, crate::MpcithError::InvalidParams(_)));
+        }
+    }
+
+    // ── M-2 regression: witness_size must match circuit.num_inputs ────────
+
+    #[test]
+    fn test_m2_witness_size_matches_circuit_inputs() {
+        // Addition / multiplication: trivial 2-wire witnesses.
+        for pred in [
+            Predicate::AdditionCheck { expected_sum: 7 },
+            Predicate::MultiplicationCheck { expected_product: 12 },
+        ] {
+            let compiled = pred.compile().unwrap();
+            assert_eq!(pred.witness_size(), 2);
+            assert_eq!(compiled.witness_size, 2);
+            assert_eq!(compiled.circuit.num_inputs, 2);
+        }
+
+        // Xor: [x, y] + 64 reserved bit wires.
+        let xor = Predicate::XorCheck { expected_xor: 6 };
+        let compiled_xor = xor.compile().unwrap();
+        assert_eq!(xor.witness_size(), 66);
+        assert_eq!(compiled_xor.witness_size, 66);
+        assert_eq!(compiled_xor.circuit.num_inputs, 66);
+
+        // RangeCheck: [x, x_bits(32), shifted(k), slack(k)].
+        let (lo, hi) = (10u32, 100u32);
+        let range = Predicate::RangeCheck { lo, hi };
+        let compiled_range = range.compile().unwrap();
+        let k = bits_needed(hi.wrapping_sub(lo));
+        assert_eq!(range.witness_size(), 1 + 32 + k + k);
+        assert_eq!(compiled_range.witness_size, 1 + 32 + k + k);
+        assert_eq!(compiled_range.circuit.num_inputs, 1 + 32 + k + k);
+        // The generated witness vector must have exactly that length.
+        assert_eq!(range.generate_witness(42).unwrap().len(), range.witness_size());
+
+        // SetMembership at several depths, including depth 0 and padding.
+        for members in [
+            vec![42u32],
+            vec![10u32, 20, 30, 42],
+            vec![10u32, 20, 30, 42, 100],
+        ] {
+            let pred = Predicate::SetMembership { members: members.clone() };
+            let compiled = pred.compile().unwrap();
+            let depth = members.len().next_power_of_two().trailing_zeros() as usize;
+            assert_eq!(pred.witness_size(), 2 + 2 * depth, "members={members:?}");
+            assert_eq!(compiled.witness_size, 2 + 2 * depth);
+            assert_eq!(compiled.circuit.num_inputs, 2 + 2 * depth);
+            let tree = MerkleTree::build(&members);
+            let mp = tree.prove_membership(0);
+            assert_eq!(set_membership_witness_vec(&mp).len(), 2 + 2 * depth);
         }
     }
 }
