@@ -67,26 +67,48 @@ fn main() {
     );
 
     separator("Predicate 3: XOR Check (x XOR y == z)");
+    // CircuitBuilder::xor() expands XOR into bit-decomposition gates, so the
+    // witness is [x, y] followed by the 32 bits of x and the 32 bits of y.
+    let (xor_x, xor_y) = (0b1010u32, 0b1100u32);
+    let mut xor_witness = vec![xor_x, xor_y];
+    for i in 0..32 {
+        xor_witness.push((xor_x >> i) & 1);
+    }
+    for i in 0..32 {
+        xor_witness.push((xor_y >> i) & 1);
+    }
     run_demo(
         "Prove: 0b1010 XOR 0b1100 == 0b0110",
         Predicate::XorCheck { expected_xor: 0b0110 },
-        &[0b1010, 0b1100],
+        &xor_witness,
         &[0b0110],
         &fast,
     );
 
     separator("Predicate 4: Set Membership (x ∈ S)");
+    // SetMembership witness is [leaf, index, bit_0..bit_{d-1}, siblings];
+    // the sole public input is the Merkle root.
     let members = vec![10u32, 20, 30, 42, 100];
+    let demo_tree = mpcith_zk::merkle::MerkleTree::build(&members);
+    let demo_root = demo_tree.root();
+    let demo_idx = members.iter().position(|&v| v == 42).unwrap();
+    let demo_mp = demo_tree.prove_membership(demo_idx);
+    let demo_depth = demo_mp.siblings.len();
+    let mut demo_witness = vec![demo_mp.leaf, demo_mp.leaf_index as u32];
+    for i in 0..demo_depth {
+        demo_witness.push(((demo_mp.leaf_index >> i) & 1) as u32);
+    }
+    demo_witness.extend_from_slice(&demo_mp.siblings);
     run_demo(
         "Prove: 42 ∈ {10, 20, 30, 42, 100}",
         Predicate::SetMembership { members: members.clone() },
-        &[42],
-        &members,
+        &demo_witness,
+        &[demo_root],
         &fast,
     );
 
-    // ── Balanced (secure) parameters — for one predicate ─────────────────
-    separator("Secure Parameters (N=3, M=96, soundness ≈ 2^{-152})");
+    // ── Balanced (prototype) parameters — for one predicate ────────────────
+    separator("Balanced Parameters (N=3, M=96, soundness ≈ 2^{-56})");
     let balanced = ProofParams::balanced();
     run_demo(
         "Prove: 1000 + 337 == 1337  [SECURE PARAMS]",
