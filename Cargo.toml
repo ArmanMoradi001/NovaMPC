@@ -2,9 +2,10 @@
 name = "mpcith-zk"
 version = "0.1.0"
 edition = "2021"
-authors = ["Thesis Author"]
+authors = ["Arman Moradi"]
 description = "MPC-in-the-Head Zero-Knowledge Proof library for privacy-preserving blockchain validation"
-license = "MIT"
+license-file = "LICENSE"
+publish = false
 
 [lib]
 name = "mpcith_zk"

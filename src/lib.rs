@@ -15,6 +15,7 @@
 
 pub mod circuit;
 pub mod commitment;
+pub mod commit_merkle;
 pub mod error;
 pub mod fiat_shamir;
 pub mod merkle;
@@ -23,11 +24,13 @@ pub mod mpc;
 pub mod params;
 pub mod predicate;
 pub mod proof;
+pub mod seed_tree;
 pub mod sharing;
+pub mod tx_validation;
 
 pub use error::MpcithError;
 pub use params::ProofParams;
-pub use predicate::Predicate;
-pub use proof::{Proof, prove, verify};
+pub use predicate::{Predicate, CompoundPredicate};
+pub use proof::{Proof, prove, prove_compound, verify_compound, verify_predicate};
 
 pub type Result<T> = std::result::Result<T, MpcithError>;

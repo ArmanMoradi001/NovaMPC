@@ -9,6 +9,7 @@
 //! each MPC party holds a share of.
 
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 
 /// A single gate in the arithmetic circuit.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,22 +104,46 @@ impl Circuit {
 
         for gate in &self.gates {
             match gate {
-                Gate::Add { left, right, output } => {
+                Gate::Add {
+                    left,
+                    right,
+                    output,
+                } => {
                     wires[*output] = wires[*left].wrapping_add(wires[*right]);
                 }
-                Gate::Mul { left, right, output } => {
+                Gate::Mul {
+                    left,
+                    right,
+                    output,
+                } => {
                     wires[*output] = wires[*left].wrapping_mul(wires[*right]);
                 }
-                Gate::Xor { left, right, output } => {
+                Gate::Xor {
+                    left,
+                    right,
+                    output,
+                } => {
                     wires[*output] = wires[*left] ^ wires[*right];
                 }
-                Gate::AddConst { input, constant, output } => {
+                Gate::AddConst {
+                    input,
+                    constant,
+                    output,
+                } => {
                     wires[*output] = wires[*input].wrapping_add(*constant);
                 }
-                Gate::MulConst { input, constant, output } => {
+                Gate::MulConst {
+                    input,
+                    constant,
+                    output,
+                } => {
                     wires[*output] = wires[*input].wrapping_mul(*constant);
                 }
-                Gate::AssertEq { input, expected, output } => {
+                Gate::AssertEq {
+                    input,
+                    expected,
+                    output,
+                } => {
                     wires[*output] = wires[*input];
                     if wires[*input] != *expected {
                         return Err(crate::MpcithError::CircuitError(format!(
@@ -142,6 +167,36 @@ impl Circuit {
     pub fn num_mul_gates(&self) -> usize {
         self.gates.iter().filter(|g| g.is_interactive()).count()
     }
+
+    /// Returns `(input_wire, expected)` for every `AssertEq` gate, in
+    /// circuit order. This lets the prover/verifier independently derive
+    /// which wire values are asserted equal to which public constants,
+    /// instead of trusting a value supplied solely by the prover.
+    pub fn assert_constraints(&self) -> Vec<(usize, u32)> {
+        self.gates
+            .iter()
+            .filter_map(|g| match g {
+                Gate::AssertEq {
+                    input, expected, ..
+                } => Some((*input, *expected)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// If `wire` is the output of some `AssertEq` gate, returns that gate's
+    /// `expected` constant. Used by the verifier to derive the expected
+    /// value of a circuit output wire directly from the (publicly hashed)
+    /// circuit, rather than trusting the prover-supplied
+    /// `Proof::expected_outputs` field.
+    pub fn assert_expected_for_output(&self, wire: usize) -> Option<u32> {
+        self.gates.iter().find_map(|g| match g {
+            Gate::AssertEq {
+                output, expected, ..
+            } if *output == wire => Some(*expected),
+            _ => None,
+        })
+    }
 }
 
 /// Builder for circuits — cleaner than constructing directly.
@@ -150,6 +205,12 @@ pub struct CircuitBuilder {
     num_inputs: usize,
     next_wire: usize,
     gates: Vec<Gate>,
+    /// Queue of pre-allocated-but-unused XOR bit-wire slots.  Each slot is
+    /// 64 wires: 32 for the left operand's bits, 32 for the right operand's
+    /// bits.  Populated by [`Self::new_with_reserved_xor_inputs`] so that all
+    /// input wires stay contiguous at indices `0..num_inputs` (never
+    /// interleaved with intermediate wires).
+    xor_bit_pool: VecDeque<usize>,
 }
 
 impl CircuitBuilder {
@@ -158,6 +219,24 @@ impl CircuitBuilder {
             num_inputs,
             next_wire: num_inputs,
             gates: Vec::new(),
+            xor_bit_pool: VecDeque::new(),
+        }
+    }
+
+    /// Like [`Self::new`], but additionally pre-allocates `num_xor_calls`
+    /// slots of 64 input wires each for use by [`Self::xor`].  The caller
+    /// must reserve enough slots to cover every `.xor()` call it makes,
+    /// including chained ones (`a.xor(b)` then `result.xor(c)` is two calls).
+    /// The witness layout stays contiguous: `num_inputs` originals, then the
+    /// 64 bit wires of each reserved slot in the order the `.xor()` calls
+    /// consume them (left bits, then right bits, per call).
+    pub fn new_with_reserved_xor_inputs(num_inputs: usize, num_xor_calls: usize) -> Self {
+        let total_inputs = num_inputs + 64 * num_xor_calls;
+        Self {
+            num_inputs: total_inputs,
+            next_wire: total_inputs,
+            gates: Vec::new(),
+            xor_bit_pool: (num_inputs..num_inputs + 64 * num_xor_calls).collect(),
         }
     }
 
@@ -177,37 +256,98 @@ impl CircuitBuilder {
 
     pub fn add(&mut self, left: usize, right: usize) -> usize {
         let output = self.alloc();
-        self.gates.push(Gate::Add { left, right, output });
+        self.gates.push(Gate::Add {
+            left,
+            right,
+            output,
+        });
         output
     }
 
     pub fn mul(&mut self, left: usize, right: usize) -> usize {
         let output = self.alloc();
-        self.gates.push(Gate::Mul { left, right, output });
+        self.gates.push(Gate::Mul {
+            left,
+            right,
+            output,
+        });
         output
     }
 
-    pub fn xor(&mut self, left: usize, right: usize) -> usize {
-        let output = self.alloc();
-        self.gates.push(Gate::Xor { left, right, output });
-        output
+    /// Compute `left XOR right` (bitwise, 32-bit) as arithmetic circuit gates.
+    ///
+    /// Uses the identity XOR(a,b) = Σ_i (a_i + b_i - 2·(a_i·b_i))·2^i
+    /// where a_i, b_i are the i-th bits of a and b.  The 64 bit wires (32 bits
+    /// of `left`, 32 of `right`) come from the pre-allocated pool set up by
+    /// [`Self::new_with_reserved_xor_inputs`]; `bit_decompose_on` gates
+    /// enforce boolean + reconstruction constraints on them.
+    ///
+    /// This never emits `Gate::Xor` — all constraints are standard
+    /// Mul/Add/MulConst/AssertEq gates verified by the MPC protocol.
+    ///
+    /// Returns an error if the builder was not constructed with a reserved
+    /// slot for this call.
+    pub fn xor(&mut self, left: usize, right: usize) -> crate::Result<usize> {
+        // Consume one 64-wire slot (left bits, then right bits) from the pool.
+        if self.xor_bit_pool.len() < 64 {
+            return Err(crate::MpcithError::CircuitError(
+                "not enough reserved XOR input slots; construct the builder with \
+                 new_with_reserved_xor_inputs and count every .xor() call including \
+                 chained ones"
+                    .to_string(),
+            ));
+        }
+        let left_bits: Vec<usize> = (0..32).map(|_| self.xor_bit_pool.pop_front().unwrap()).collect();
+        let right_bits: Vec<usize> = (0..32).map(|_| self.xor_bit_pool.pop_front().unwrap()).collect();
+        bit_decompose_on(self, left, &left_bits);
+        bit_decompose_on(self, right, &right_bits);
+
+        // Compute XOR bit by bit: xor_i = a_i + b_i - 2*(a_i*b_i)
+        // and accumulate the weighted sum: Σ xor_i * 2^i.
+        // Bit 0 has weight 1 (no MulConst needed).
+        let and_0 = self.mul(left_bits[0], right_bits[0]);
+        let neg_two_and_0 = self.mul_const(and_0, 0xFFFFFFFEu32); // -2 mod 2^32
+        let sum_0 = self.add(left_bits[0], right_bits[0]);
+        let mut xor_result = self.add(sum_0, neg_two_and_0);
+
+        for i in 1..32 {
+            let and_i = self.mul(left_bits[i], right_bits[i]);
+            let neg_two_and_i = self.mul_const(and_i, 0xFFFFFFFEu32);
+            let sum_i = self.add(left_bits[i], right_bits[i]);
+            let xor_bit_i = self.add(sum_i, neg_two_and_i);
+            let weighted = self.mul_const(xor_bit_i, 1u32 << i);
+            xor_result = self.add(xor_result, weighted);
+        }
+        Ok(xor_result)
     }
 
     pub fn add_const(&mut self, input: usize, constant: u32) -> usize {
         let output = self.alloc();
-        self.gates.push(Gate::AddConst { input, constant, output });
+        self.gates.push(Gate::AddConst {
+            input,
+            constant,
+            output,
+        });
         output
     }
 
     pub fn mul_const(&mut self, input: usize, constant: u32) -> usize {
         let output = self.alloc();
-        self.gates.push(Gate::MulConst { input, constant, output });
+        self.gates.push(Gate::MulConst {
+            input,
+            constant,
+            output,
+        });
         output
     }
 
     pub fn assert_eq(&mut self, input: usize, expected: u32) -> usize {
         let output = self.alloc();
-        self.gates.push(Gate::AssertEq { input, expected, output });
+        self.gates.push(Gate::AssertEq {
+            input,
+            expected,
+            output,
+        });
         output
     }
 
@@ -242,11 +382,7 @@ pub fn bit_decompose(
 /// Like [`bit_decompose`] but uses caller-provided wire indices for the bits
 /// instead of allocating new input wires.  Useful when all input wires must
 /// be allocated up-front (e.g. multiple decompositions in one circuit).
-pub fn bit_decompose_on(
-    builder: &mut CircuitBuilder,
-    input_wire: usize,
-    bit_wires: &[usize],
-) {
+pub fn bit_decompose_on(builder: &mut CircuitBuilder, input_wire: usize, bit_wires: &[usize]) {
     let bit_count = bit_wires.len();
     if bit_count == 0 {
         return;
@@ -266,9 +402,12 @@ pub fn bit_decompose_on(
         sum = builder.add(sum, weighted);
     }
 
-    // Assert sum == input_wire.
-    // XOR(a, a) == 0, so xor(sum, input_wire) should be 0 when equal.
-    let diff = builder.xor(sum, input_wire);
+    // Assert sum == input_wire using pure arithmetic: (sum - input_wire) == 0.
+    // mul_const(w, u32::MAX) computes -w mod 2^32 (since u32::MAX = -1 mod 2^32).
+    // This avoids a Gate::Xor here, keeping reconstruction fully linear and
+    // correctly enforced via the assert_shares mechanism in proof::verify_unchecked().
+    let neg_input = builder.mul_const(input_wire, u32::MAX);
+    let diff = builder.add(sum, neg_input);
     builder.assert_eq(diff, 0);
 }
 
@@ -280,8 +419,8 @@ mod tests {
     fn test_addition_circuit() {
         // Circuit: assert x + y == 7
         let mut builder = CircuitBuilder::new(2); // wires 0=x, 1=y
-        let sum = builder.add(0, 1);               // wire 2 = x + y
-        let _out = builder.assert_eq(sum, 7);       // wire 3, asserts == 7
+        let sum = builder.add(0, 1); // wire 2 = x + y
+        let _out = builder.assert_eq(sum, 7); // wire 3, asserts == 7
         let circuit = builder.build(1);
 
         let trace = circuit.evaluate(&[3, 4]).unwrap();
@@ -353,7 +492,53 @@ mod tests {
                 witness.push((value >> i) & 1);
             }
 
-            assert!(circuit.evaluate(&witness).is_ok(), "Failed for value {value}");
+            assert!(
+                circuit.evaluate(&witness).is_ok(),
+                "Failed for value {value}"
+            );
         }
+    }
+
+    #[test]
+    fn test_chained_xor_reserved_inputs() {
+        // Regression test: two chained .xor() calls on the same builder must
+        // keep all input wires contiguous.  Before new_with_reserved_xor_inputs,
+        // xor() called add_input() mid-build, interleaving input wires with
+        // intermediate wires so the witness no longer mapped onto inputs and
+        // the circuit silently computed wrong results.
+        let mut builder = CircuitBuilder::new_with_reserved_xor_inputs(3, 2);
+        let w = builder.xor(0, 1).unwrap();
+        let z = builder.xor(w, 2).unwrap();
+        let _out = builder.assert_eq(z, 0x0F ^ 0x5A ^ 0x26);
+        let circuit = builder.build(1);
+
+        let a = 0x0Fu32;
+        let b = 0x5Au32;
+        let c = 0x26u32;
+        let mut witness = vec![a, b, c];
+        for i in 0..32 {
+            witness.push((a >> i) & 1);
+        }
+        for i in 0..32 {
+            witness.push((b >> i) & 1);
+        }
+        for i in 0..32 {
+            witness.push(((a ^ b) >> i) & 1);
+        }
+        for i in 0..32 {
+            witness.push((c >> i) & 1);
+        }
+
+        let trace = circuit.evaluate(&witness).unwrap();
+        assert_eq!(trace[z], a ^ b ^ c);
+        assert_eq!(circuit.outputs(&trace), &[a ^ b ^ c]);
+    }
+
+    #[test]
+    fn test_xor_missing_reserved_slot_errors() {
+        // Constructed with new() (no reserved slots), xor() must error loudly
+        // rather than silently fall back to interleaved add_input() allocation.
+        let mut builder = CircuitBuilder::new(2);
+        assert!(builder.xor(0, 1).is_err());
     }
 }

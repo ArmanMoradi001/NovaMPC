@@ -40,11 +40,11 @@ pub fn derive_challenges(
 
     // Expand the seed into `num_repetitions` challenges using a PRNG.
     // We use ChaCha20 seeded from the hash.
-    use rand::{RngCore, SeedableRng};
+    use rand::{Rng, SeedableRng};
     let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
 
     (0..num_repetitions)
-        .map(|_| (rng.next_u64() as usize) % num_parties)
+        .map(|_| rng.gen_range(0..num_parties))
         .collect()
 }
 

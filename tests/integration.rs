@@ -3,12 +3,22 @@
 //! These tests exercise the full prove/verify pipeline across all predicate
 //! types and parameter sets, and produce a proof-size / timing table.
 
+use mpcith_zk::circuit::CircuitBuilder;
+use mpcith_zk::fiat_shamir::hash_circuit;
 use mpcith_zk::merkle::MerkleTree;
 use mpcith_zk::params::ProofParams;
 use mpcith_zk::predicate::Predicate;
 use mpcith_zk::proof::Proof;
-use mpcith_zk::{prove, verify};
+use mpcith_zk::tx_validation::{
+    create_transaction_proof, verify_transaction_proof, TransactionStatement, TransactionWitness,
+};
+use mpcith_zk::{prove, prove_compound, verify_compound, verify_predicate, CompoundPredicate};
 use std::time::Instant;
+
+/// The predicate used by the addition-proof tamper tests below.
+fn add_pred() -> Predicate {
+    Predicate::AdditionCheck { expected_sum: 7 }
+}
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -63,10 +73,10 @@ fn test_range_and_membership_composition() {
     let x = 42u32;
     let range_pred = Predicate::RangeCheck { lo, hi };
     let r_witness = range_witness(x, lo, hi);
-    let range_proof = prove(range_pred, &r_witness, &[lo, hi], &params)
-        .expect("range prove should succeed");
+    let range_proof =
+        prove(range_pred.clone(), &r_witness, &[lo, hi], &params).expect("range prove should succeed");
     assert!(
-        verify(&range_proof, &[lo, hi], &params).unwrap(),
+        verify_predicate(&range_pred, &range_proof, &[lo, hi], &params).unwrap(),
         "range verify should pass"
     );
 
@@ -78,10 +88,10 @@ fn test_range_and_membership_composition() {
     let merkle_proof = tree.prove_membership(leaf_idx);
     let m_witness = membership_witness(&merkle_proof);
     let mem_pred = Predicate::SetMembership { members };
-    let mem_proof = prove(mem_pred, &m_witness, &[root], &params)
-        .expect("membership prove should succeed");
+    let mem_proof =
+        prove(mem_pred.clone(), &m_witness, &[root], &params).expect("membership prove should succeed");
     assert!(
-        verify(&mem_proof, &[root], &params).unwrap(),
+        verify_predicate(&mem_pred, &mem_proof, &[root], &params).unwrap(),
         "membership verify should pass"
     );
 }
@@ -90,6 +100,7 @@ fn test_range_and_membership_composition() {
 fn test_proof_sizes_table() {
     let fast = ProofParams::fast_insecure();
     let balanced = ProofParams::balanced();
+    let fabric = ProofParams::fabric_recommended();
 
     // Predicate descriptions and (predicate, witness_builder, public_inputs) tuples
     struct Case {
@@ -148,22 +159,22 @@ fn test_proof_sizes_table() {
     println!("{}", "-".repeat(80));
 
     for case in cases {
-        for (label, params) in &[
-            ("N=3 M=10", fast.clone()),
-            ("N=16 M=38", balanced.clone()),
-        ] {
+        let param_sets: Vec<(String, ProofParams)> = [&fast, &balanced, &fabric]
+            .iter()
+            .map(|p| {
+                (
+                    format!("N={} M={}", p.num_parties, p.num_repetitions),
+                    (**p).clone(),
+                )
+            })
+            .collect();
+        for (label, params) in &param_sets {
             let t0 = Instant::now();
-            let proof = prove(
-                case.pred.clone(),
-                &case.witness,
-                &case.public,
-                params,
-            )
-            .unwrap();
+            let proof = prove(case.pred.clone(), &case.witness, &case.public, params).unwrap();
             let prove_ms = t0.elapsed().as_millis();
 
             let t1 = Instant::now();
-            assert!(verify(&proof, &case.public, params).unwrap());
+            assert!(verify_predicate(&case.pred, &proof, &case.public, params).unwrap());
             let verify_ms = t1.elapsed().as_millis();
 
             let size = proof.serialized_size();
@@ -173,6 +184,43 @@ fn test_proof_sizes_table() {
             );
         }
     }
+}
+
+#[test]
+fn test_serialized_roundtrip_mul_heavy_predicates() {
+    // The deserialized proof contains only committed/transmitted data, so the
+    // verifier must rebuild
+    // the residual party's inputs from the transmitted `residual_input_shares`
+    // and every Mul share from the seed-derived ZKBoo formula.  RangeCheck and
+    // SetMembership contain many Mul (and Xor) gates, so this exercises the
+    // full fix end-to-end over a serialized proof.
+    let params = ProofParams::fast_insecure();
+
+    let lo = 0u32;
+    let hi = 1000u32;
+    let x = 500u32;
+    let range_pred = Predicate::RangeCheck { lo, hi };
+    let r_witness = range_witness(x, lo, hi);
+    let range_proof = prove(range_pred.clone(), &r_witness, &[lo, hi], &params).unwrap();
+    let range_bytes = bincode::serialize(&range_proof).unwrap();
+    let range_rt: Proof = bincode::deserialize(&range_bytes).unwrap();
+    assert!(
+        verify_predicate(&range_pred, &range_rt, &[lo, hi], &params).unwrap(),
+        "deserialized RangeCheck proof must verify"
+    );
+
+    let members: Vec<u32> = vec![10, 20, 30, 42, 50, 60, 70, 80];
+    let tree = MerkleTree::build(&members);
+    let root = tree.root();
+    let mp = tree.prove_membership(3);
+    let mem_pred = Predicate::SetMembership { members };
+    let mem_proof = prove(mem_pred.clone(), &membership_witness(&mp), &[root], &params).unwrap();
+    let mem_bytes = bincode::serialize(&mem_proof).unwrap();
+    let mem_rt: Proof = bincode::deserialize(&mem_bytes).unwrap();
+    assert!(
+        verify_predicate(&mem_pred, &mem_rt, &[root], &params).unwrap(),
+        "deserialized SetMembership proof must verify"
+    );
 }
 
 #[test]
@@ -190,10 +238,7 @@ fn test_membership_non_member_rejected() {
     let pred = Predicate::SetMembership { members };
 
     let result = prove(pred, &witness, &[root], &params);
-    assert!(
-        result.is_err(),
-        "prove() should reject a non-member leaf"
-    );
+    assert!(result.is_err(), "prove() should reject a non-member leaf");
 }
 
 #[test]
@@ -205,17 +250,14 @@ fn test_range_proof_large_range() {
 
     let pred = Predicate::RangeCheck { lo, hi };
     let witness = range_witness(x, lo, hi);
-    let proof = prove(pred, &witness, &[lo, hi], &params).unwrap();
-    assert!(verify(&proof, &[lo, hi], &params).unwrap());
+    let proof = prove(pred.clone(), &witness, &[lo, hi], &params).unwrap();
+    assert!(verify_predicate(&pred, &proof, &[lo, hi], &params).unwrap());
 }
 
 #[test]
 fn test_soundness_parameter_sweep() {
     println!();
-    println!(
-        "{:<6} {:<6} {:>12}",
-        "N", "M", "sound_bits"
-    );
+    println!("{:<6} {:<6} {:>12}", "N", "M", "sound_bits");
     println!("{}", "-".repeat(28));
 
     let party_counts = [3, 5, 16];
@@ -223,8 +265,9 @@ fn test_soundness_parameter_sweep() {
 
     for &n in &party_counts {
         for &m in &rep_counts {
-            // soundness ≈ (1/N)^M  →  bits = M * log2(N)
-            let bits = (m as f64) * ((n as f64).log2());
+            // soundness ≈ ((N-1)/N)^M  →  bits = M * log2(N/(N-1))
+            // (2-of-3 ZKBoo opening: per-rep error 2/3 at N=3).
+            let bits = (m as f64) * ((n as f64 / (n as f64 - 1.0)).log2());
             assert!(bits > 0.0, "soundness bits must be positive");
             println!("{:<6} {:<6} {:>12.2}", n, m, bits);
         }
@@ -241,22 +284,60 @@ fn make_addition_proof() -> Proof {
 
 #[test]
 fn test_tampered_commitment_rejected() {
+    // Previously tampered with `commitments[0]` directly; that field is gone.
+    // The equivalent under the Merkle-commitment scheme is to corrupt the
+    // `commitment_randomness` of an opened view: the verifier recomputes the
+    // BLAKE3 commitment from (view + randomness), converts it to a Merkle leaf,
+    // and verifies the auth path against `commitment_root`.  Wrong randomness
+    // produces a different leaf, causing MerkleProof::verify() to return false.
     let mut proof = make_addition_proof();
-    // Flip one bit in the first commitment of the first repetition.
-    proof.repetitions[0].commitments[0].0[0] ^= 0x01;
-    let result = verify(&proof, &[7], &ProofParams::fast_insecure());
-    assert!(result.is_err(), "tampered commitment must cause Err, not Ok(false)");
+    proof.repetitions[0].opened_views[0].commitment_randomness[0] ^= 0x01;
+    let result = verify_predicate(&add_pred(), &proof, &[7], &ProofParams::fast_insecure());
+    assert!(
+        result.is_err(),
+        "tampered commitment randomness must cause Err"
+    );
+}
+
+#[test]
+fn test_tampered_commitment_root_rejected() {
+    // Flip a bit in the Merkle root stored in the proof. The verifier uses
+    // commitment_root for Fiat-Shamir re-derivation (so challenges change,
+    // causing hidden_party mismatches) AND as the expected root in every
+    // auth-path check for that repetition (so any path that was valid under
+    // the original root now fails). Either path leads to Err.
+    let mut proof = make_addition_proof();
+    proof.repetitions[0].commitment_root[0] ^= 0x01;
+    let result = verify_predicate(&add_pred(), &proof, &[7], &ProofParams::fast_insecure());
+    assert!(result.is_err(), "tampered commitment_root must cause Err");
+}
+
+#[test]
+fn test_tampered_auth_path_rejected() {
+    // Flip a bit in the first sibling of the first opened view's auth path.
+    // MerkleProof::verify() recomputes the root from leaf + siblings; a wrong
+    // sibling produces a root that does not match commitment_root -> Err.
+    let mut proof = make_addition_proof();
+    proof.repetitions[0].opened_views[0].commitment_auth_path[0][0] ^= 0x01;
+    let result = verify_predicate(&add_pred(), &proof, &[7], &ProofParams::fast_insecure());
+    assert!(result.is_err(), "tampered auth path must cause Err");
 }
 
 #[test]
 fn test_tampered_opened_view_rejected() {
     let mut proof = make_addition_proof();
-    // Flip the output wire share — this is checked during reconstruction.
+    // Tamper a transmitted per-party output share. The verifier cross-checks
+    // every revealed output share against the opened party's own committed
+    // view (recomputed from its seed), so a forged value must be rejected.
     // AdditionCheck: num_wires=4, num_outputs=1, output_start=3.
-    let output_wire = proof.num_circuit_wires - proof.num_circuit_outputs;
-    proof.repetitions[0].opened_views[0].view.wire_shares[output_wire] ^= 0xFF;
-    let result = verify(&proof, &[7], &ProofParams::fast_insecure());
-    assert!(result.is_err(), "tampered output wire share must cause Err, not Ok(false)");
+    // Note: this circuit has no Mul/Xor gates, so every view's
+    // mul_output_shares is empty — output_shares is the relevant target.
+    proof.repetitions[0].output_shares[0][0] ^= 0xFF;
+    let result = verify_predicate(&add_pred(), &proof, &[7], &ProofParams::fast_insecure());
+    assert!(
+        result.is_err(),
+        "tampered output share must cause Err, not Ok(false)"
+    );
 }
 
 #[test]
@@ -266,19 +347,37 @@ fn test_tampered_hidden_party_rejected() {
     // Change to a different valid party index.
     let alternative = if original == 0 { 1 } else { 0 };
     proof.repetitions[0].hidden_party = alternative;
-    let result = verify(&proof, &[7], &ProofParams::fast_insecure());
-    assert!(result.is_err(), "tampered hidden_party must cause Err, not Ok(false)");
+    let result = verify_predicate(&add_pred(), &proof, &[7], &ProofParams::fast_insecure());
+    assert!(
+        result.is_err(),
+        "tampered hidden_party must cause Err, not Ok(false)"
+    );
 }
 
 #[test]
 fn test_tampered_intermediate_wire_rejected() {
     let mut proof = make_addition_proof();
-    // Flip a NON-output wire share (wire 0 = witness input x).
-    // AdditionCheck: num_wires=4, num_outputs=1, output_start=3.
-    // Wire 0 is an input wire — not an output, so this was previously undetected.
-    proof.repetitions[0].opened_views[0].view.wire_shares[0] ^= 0xFF;
-    let result = verify(&proof, &[7], &ProofParams::fast_insecure());
-    assert!(result.is_err(), "tampered intermediate wire must now cause Err via verify_party_view");
+    // Flip a residual input share (wire 0 = witness input x) of an opened
+    // view belonging to the residual party (index N-1), whose input shares
+    // are transmitted because they cannot be re-derived from its seed. The
+    // tampered value no longer matches the party's committed view, so the
+    // Merkle commitment check — and, failing that, the recomputed linear
+    // shares fed to verify_party_view — must reject it.
+    let num_parties = proof.repetitions[0].opened_views.len() + 1;
+    let target = proof
+        .repetitions
+        .iter_mut()
+        .flat_map(|rep| rep.opened_views.iter_mut())
+        .find(|opened| {
+            opened.view.party_idx == num_parties - 1 && !opened.view.residual_input_shares.is_empty()
+        })
+        .expect("proof must contain at least one opened residual-party view");
+    target.view.residual_input_shares[0] ^= 0xFF;
+    let result = verify_predicate(&add_pred(), &proof, &[7], &ProofParams::fast_insecure());
+    assert!(
+        result.is_err(),
+        "tampered intermediate wire must now cause Err via verify_party_view"
+    );
 }
 
 #[test]
@@ -298,6 +397,22 @@ fn test_hidden_party_view_not_leaked() {
             "repetition {rep_idx}: expected N-1 opened views"
         );
     }
+}
+
+#[test]
+fn test_tampered_co_path_rejected() {
+    let mut proof = make_addition_proof();
+    // Flip one byte in the last (highest-level) co-path node. This node
+    // covers at least half the tree, so it always affects at least one
+    // real party's reconstructed seed, causing commitment verification
+    // to fail.
+    let last = proof.repetitions[0].co_path.len() - 1;
+    proof.repetitions[0].co_path[last][0] ^= 0x01;
+    let result = verify_predicate(&add_pred(), &proof, &[7], &ProofParams::fast_insecure());
+    assert!(
+        result.is_err(),
+        "tampered co_path must cause Err — seed reconstruction produces wrong commitments"
+    );
 }
 
 // Note: test_forged_membership_leaf_rejected is already covered by
@@ -330,26 +445,20 @@ fn test_proof_size_blowup_diagnostic() {
         let proof_bytes = proof.serialized_size();
 
         let sample_view = &proof.repetitions[0].opened_views[0].view;
-        let broadcast_ser = bincode::serialize(&sample_view.broadcast_messages).unwrap();
-        let shares_ser = bincode::serialize(&sample_view.wire_shares).unwrap();
+        let mul_shares_ser = bincode::serialize(&sample_view.mul_output_shares).unwrap();
 
         println!("--- RangeCheck(0, MAX/2) ---");
         println!("  gates: {total_gates}  (mul: {mul_gates})  wires: {num_wires}");
         println!("  single PartyView:");
-        println!("    broadcast_messages: {} msgs, {} bytes", sample_view.broadcast_messages.len(), broadcast_ser.len());
-        println!("    wire_shares:       {} words, {} bytes", sample_view.wire_shares.len(), shares_ser.len());
+        println!(
+            "    mul_output_shares: {} shares, {} bytes",
+            sample_view.mul_output_shares.len(),
+            mul_shares_ser.len()
+        );
 
         let avg = proof_bytes as f64 / (m as f64 * n as f64);
-        let theoretical_min = sample_view.wire_shares.len() * 4;
         println!("  proof_bytes: {proof_bytes}");
-        println!("  avg bytes/party/rep: {avg:.0}  (theoretical min if shares-only: {theoretical_min})");
-        println!("  blowup factor: {:.1}x", avg / theoretical_min as f64);
-
-        let msgs_per_party = sample_view.broadcast_messages.len();
-        let expected_if_full_copy = mul_gates * n;
-        let redundant = msgs_per_party == expected_if_full_copy;
-        println!("  broadcast msgs/party: {msgs_per_party}  (mul gates: {mul_gates}, if full N-copy: {expected_if_full_copy})");
-        println!("  redundant full N-copy per gate per party? {redundant}");
+        println!("  avg bytes/party/rep: {avg:.0}");
         println!();
     }
 
@@ -371,26 +480,185 @@ fn test_proof_size_blowup_diagnostic() {
         let proof_bytes = proof.serialized_size();
 
         let sample_view = &proof.repetitions[0].opened_views[0].view;
-        let broadcast_ser = bincode::serialize(&sample_view.broadcast_messages).unwrap();
-        let shares_ser = bincode::serialize(&sample_view.wire_shares).unwrap();
+        let mul_shares_ser = bincode::serialize(&sample_view.mul_output_shares).unwrap();
 
         println!("--- SetMembership(8) ---");
         println!("  gates: {total_gates}  (mul: {mul_gates})  wires: {num_wires}");
         println!("  single PartyView:");
-        println!("    broadcast_messages: {} msgs, {} bytes", sample_view.broadcast_messages.len(), broadcast_ser.len());
-        println!("    wire_shares:       {} words, {} bytes", sample_view.wire_shares.len(), shares_ser.len());
+        println!(
+            "    mul_output_shares: {} shares, {} bytes",
+            sample_view.mul_output_shares.len(),
+            mul_shares_ser.len()
+        );
 
         let avg = proof_bytes as f64 / (m as f64 * n as f64);
-        let theoretical_min = sample_view.wire_shares.len() * 4;
         println!("  proof_bytes: {proof_bytes}");
-        println!("  avg bytes/party/rep: {avg:.0}  (theoretical min if shares-only: {theoretical_min})");
-        println!("  blowup factor: {:.1}x", avg / theoretical_min as f64);
-
-        let msgs_per_party = sample_view.broadcast_messages.len();
-        let expected_if_full_copy = mul_gates * n;
-        let redundant = msgs_per_party == expected_if_full_copy;
-        println!("  broadcast msgs/party: {msgs_per_party}  (mul gates: {mul_gates}, if full N-copy: {expected_if_full_copy})");
-        println!("  redundant full N-copy per gate per party? {redundant}");
+        println!("  avg bytes/party/rep: {avg:.0}");
         println!();
     }
+}
+
+// ─── H-2 regression: circuit-substitution must be unreachable via the
+//     public API. The only verification entry points an external crate has
+//     are `verify_predicate`, `verify_compound` and
+//     `tx_validation::verify_transaction_proof`; every one of them binds
+//     verification to an independently compiled, predicate-derived circuit
+//     hash before running the transcript checks.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_h2_tautological_circuit_rejected_by_public_api() {
+    let params = ProofParams::fast_insecure();
+
+    // Attacker proves a *tautology*: "0 + 0 == 0". This is a genuinely valid
+    // MPCitH proof — honestly generated, internally consistent, and for a
+    // circuit whose single assertion is always true. A naive verifier that
+    // only checks proof.circuit_hash == hash_circuit(proof.circuit) would be
+    // none the wiser.
+    let tautology = Predicate::AdditionCheck { expected_sum: 0 };
+    let attack_proof = prove(tautology, &[0u32, 0], &[0], &params)
+        .expect("the tautological proof itself must be honestly provable");
+
+    // Sanity (documents the foot-gun): the embedded hash IS self-consistent,
+    // i.e. the old unchecked `verify()` contract would have accepted it.
+    assert_eq!(
+        attack_proof.circuit_hash,
+        hash_circuit(&attack_proof.circuit),
+        "attack precondition: embedded hash matches the embedded circuit"
+    );
+
+    // The application intended to check a DIFFERENT statement. The public
+    // safe API must refuse — the attacker's circuit is not the predicate's
+    // circuit, no matter how valid the transcript is.
+    let intended = Predicate::RangeCheck { lo: 1, hi: 100 };
+    let result = verify_predicate(&intended, &attack_proof, &[1, 100], &params);
+    assert!(
+        result.is_err(),
+        "a valid proof of a tautology MUST NOT verify as a RangeCheck"
+    );
+    match result.unwrap_err() {
+        mpcith_zk::MpcithError::VerificationFailed(msg) => {
+            assert!(
+                msg.contains("circuit-substitution"),
+                "error should name the circuit-substitution defense, got: {msg}"
+            );
+        }
+        other => panic!("expected VerificationFailed, got {other:?}"),
+    }
+
+    // Even under the "matching" public-input shape, substitution fails.
+    let same_shape = Predicate::AdditionCheck { expected_sum: 7 };
+    assert!(verify_predicate(&same_shape, &attack_proof, &[7], &params).is_err());
+}
+
+#[test]
+fn test_h2_swapped_circuit_forgery_rejected_by_public_api() {
+    // Direct forgery: take a proof of P and swap in an attacker-chosen
+    // trivially-satisfiable circuit (assert_eq(0,0)), re-deriving every
+    // self-consistency field so nothing but predicate binding can catch it.
+    let params = ProofParams::fast_insecure();
+    let p = Predicate::AdditionCheck { expected_sum: 7 };
+    let mut forged = prove(p, &[3u32, 4], &[7], &params).unwrap();
+
+    let mut builder = CircuitBuilder::new(2);
+    builder.assert_eq(0, 0);
+    let trivial = builder.build(1);
+    forged.circuit = trivial.clone();
+    forged.circuit_hash = hash_circuit(&trivial);
+    forged.num_circuit_wires = trivial.num_wires;
+    forged.num_circuit_outputs = trivial.num_outputs;
+
+    let result = verify_predicate(&add_pred(), &forged, &[7], &params);
+    assert!(result.is_err(), "swapped-circuit forgery must not verify");
+}
+
+#[test]
+fn test_h2_proof_for_p_cannot_be_substituted_as_q() {
+    let params = ProofParams::fast_insecure();
+
+    let p = Predicate::AdditionCheck { expected_sum: 7 };
+    let proof_p = prove(p, &[3u32, 4], &[7], &params).unwrap();
+
+    // Different constant, same family.
+    let q1 = Predicate::AdditionCheck { expected_sum: 8 };
+    assert!(
+        verify_predicate(&q1, &proof_p, &[7], &params).is_err(),
+        "proof of sum==7 must not verify as sum==8"
+    );
+
+    // Different predicate family entirely.
+    let q2 = Predicate::MultiplicationCheck { expected_product: 12 };
+    assert!(verify_predicate(&q2, &proof_p, &[12], &params).is_err());
+
+    // Compound Q is also out of reach for a simple-P proof.
+    let members = vec![10u32, 20, 30, 42];
+    let root = MerkleTree::build(&members).root();
+    let q3 = CompoundPredicate::range_and_membership(0, 100, members);
+    assert!(
+        verify_compound(&q3, &proof_p, &[0, 100, root], &params).is_err(),
+        "simple-predicate proof must not verify as a compound predicate"
+    );
+}
+
+#[test]
+fn test_h2_valid_predicate_proofs_still_verify() {
+    let params = ProofParams::fast_insecure();
+
+    let pred = Predicate::AdditionCheck { expected_sum: 7 };
+    let proof = prove(pred.clone(), &[3u32, 4], &[7], &params).unwrap();
+    assert!(verify_predicate(&pred, &proof, &[7], &params).unwrap());
+
+    // Serialized roundtrip (realistic networked path).
+    let bytes = bincode::serialize(&proof).unwrap();
+    let rt: Proof = bincode::deserialize(&bytes).unwrap();
+    assert!(verify_predicate(&pred, &rt, &[7], &params).unwrap());
+}
+
+#[test]
+fn test_h2_valid_compound_proofs_still_verify() {
+    let params = ProofParams::fast_insecure();
+    let members = vec![10u32, 20, 30, 42];
+    let compound = CompoundPredicate::range_and_membership(0, 100, members.clone());
+
+    let witness = compound.generate_witness(42).unwrap();
+    let root = MerkleTree::build(&members).root();
+    let public_inputs = vec![0u32, 100, root];
+
+    let proof = prove_compound(compound.clone(), &witness, &public_inputs, &params).unwrap();
+    assert!(verify_compound(&compound, &proof, &public_inputs, &params).unwrap());
+
+    let bytes = bincode::serialize(&proof).unwrap();
+    let rt: Proof = bincode::deserialize(&bytes).unwrap();
+    assert!(verify_compound(&compound, &rt, &public_inputs, &params).unwrap());
+}
+
+#[test]
+fn test_h2_transaction_verification_still_works() {
+    let params = ProofParams::fast_insecure();
+    let members = vec![10u32, 20, 500, 999];
+    let tree = MerkleTree::build(&members);
+    let depth = members.len().next_power_of_two().trailing_zeros() as usize;
+
+    let statement = TransactionStatement {
+        amount_range: (1, 1000),
+        authorized_set_root: tree.root(),
+        merkle_depth: depth,
+        context: b"h2-block-42".to_vec(),
+        members: members.clone(),
+    };
+    let witness = TransactionWitness {
+        secret_value: 500,
+        merkle_proof: tree.prove_membership(2),
+    };
+
+    let proof = create_transaction_proof(&statement, &witness, &params)
+        .expect("valid transaction proof must be creatable");
+    let ok = verify_transaction_proof(&proof, &statement, &params)
+        .expect("verification of a valid transaction proof must not error");
+    assert!(ok, "valid transaction proof must verify");
+
+    // And the same proof must NOT validate against a different statement.
+    let mut other = statement.clone();
+    other.context = b"h2-block-43".to_vec();
+    assert!(verify_transaction_proof(&proof, &other, &params).is_err());
 }

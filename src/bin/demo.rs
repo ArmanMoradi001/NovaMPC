@@ -1,6 +1,6 @@
 //! Demo binary: exercises all predicates and prints proof statistics.
 
-use mpcith_zk::{prove, verify, Predicate, ProofParams};
+use mpcith_zk::{prove, verify_predicate, Predicate, ProofParams};
 
 fn separator(title: &str) {
     println!("\n{}", "═".repeat(60));
@@ -17,7 +17,7 @@ fn run_demo(label: &str, predicate: Predicate, witness: &[u32], public_inputs: &
     println!("  Params:        N={}, M={}", params.num_parties, params.num_repetitions);
 
     let t_prove = Instant::now();
-    let proof = match prove(predicate, witness, public_inputs, params) {
+    let proof = match prove(predicate.clone(), witness, public_inputs, params) {
         Ok(p) => p,
         Err(e) => {
             println!("  ✗ Prove failed: {}", e);
@@ -29,7 +29,9 @@ fn run_demo(label: &str, predicate: Predicate, witness: &[u32], public_inputs: &
     let proof_bytes = proof.serialized_size();
 
     let t_verify = Instant::now();
-    let valid = verify(&proof, public_inputs, params).unwrap_or(false);
+    // Predicate-bound verification: binds the proof to the expected circuit,
+    // so a substituted/tautological circuit can never be accepted.
+    let valid = verify_predicate(&predicate, &proof, public_inputs, params).unwrap_or(false);
     let verify_ms = t_verify.elapsed().as_millis();
 
     println!("  Proof size:    {} bytes ({:.1} KB)", proof_bytes, proof_bytes as f64 / 1024.0);
@@ -65,26 +67,48 @@ fn main() {
     );
 
     separator("Predicate 3: XOR Check (x XOR y == z)");
+    // CircuitBuilder::xor() expands XOR into bit-decomposition gates, so the
+    // witness is [x, y] followed by the 32 bits of x and the 32 bits of y.
+    let (xor_x, xor_y) = (0b1010u32, 0b1100u32);
+    let mut xor_witness = vec![xor_x, xor_y];
+    for i in 0..32 {
+        xor_witness.push((xor_x >> i) & 1);
+    }
+    for i in 0..32 {
+        xor_witness.push((xor_y >> i) & 1);
+    }
     run_demo(
         "Prove: 0b1010 XOR 0b1100 == 0b0110",
         Predicate::XorCheck { expected_xor: 0b0110 },
-        &[0b1010, 0b1100],
+        &xor_witness,
         &[0b0110],
         &fast,
     );
 
     separator("Predicate 4: Set Membership (x ∈ S)");
+    // SetMembership witness is [leaf, index, bit_0..bit_{d-1}, siblings];
+    // the sole public input is the Merkle root.
     let members = vec![10u32, 20, 30, 42, 100];
+    let demo_tree = mpcith_zk::merkle::MerkleTree::build(&members);
+    let demo_root = demo_tree.root();
+    let demo_idx = members.iter().position(|&v| v == 42).unwrap();
+    let demo_mp = demo_tree.prove_membership(demo_idx);
+    let demo_depth = demo_mp.siblings.len();
+    let mut demo_witness = vec![demo_mp.leaf, demo_mp.leaf_index as u32];
+    for i in 0..demo_depth {
+        demo_witness.push(((demo_mp.leaf_index >> i) & 1) as u32);
+    }
+    demo_witness.extend_from_slice(&demo_mp.siblings);
     run_demo(
         "Prove: 42 ∈ {10, 20, 30, 42, 100}",
         Predicate::SetMembership { members: members.clone() },
-        &[42],
-        &members,
+        &demo_witness,
+        &[demo_root],
         &fast,
     );
 
-    // ── Balanced (secure) parameters — for one predicate ─────────────────
-    separator("Secure Parameters (N=16, M=38, soundness ≈ 2^{-40})");
+    // ── Balanced (prototype) parameters — for one predicate ────────────────
+    separator("Balanced Parameters (N=3, M=96, soundness ≈ 2^{-56})");
     let balanced = ProofParams::balanced();
     run_demo(
         "Prove: 1000 + 337 == 1337  [SECURE PARAMS]",
@@ -99,7 +123,7 @@ fn main() {
     for (label, params) in [
         ("fast_insecure (N=3, M=10)", ProofParams::fast_insecure()),
         ("low_n        (N=3, M=64)", ProofParams::low_n()),
-        ("balanced     (N=16, M=38)", ProofParams::balanced()),
+        ("balanced     (N=3, M=96)", ProofParams::balanced()),
     ] {
         let n = params.num_parties as f64;
         let m = params.num_repetitions as f64;
