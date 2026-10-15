@@ -111,7 +111,7 @@ fn main() {
     separator("Balanced Parameters (N=3, M=96, soundness ≈ 2^{-56})");
     let balanced = ProofParams::balanced();
     run_demo(
-        "Prove: 1000 + 337 == 1337  [SECURE PARAMS]",
+        "Prove: 1000 + 337 == 1337  [BALANCED PROTOTYPE PARAMS]",
         Predicate::AdditionCheck { expected_sum: 1337 },
         &[1000, 337],
         &[1337],
@@ -120,17 +120,20 @@ fn main() {
 
     // ── Soundness error estimate ──────────────────────────────────────────
     separator("Parameter Analysis");
+    // Estimator input: a 2-input AdditionCheck circuit with 1 public input.
+    let estimate_circuit = Predicate::AdditionCheck { expected_sum: 0 }
+        .compile()
+        .expect("demo estimate circuit must compile")
+        .circuit;
     for (label, params) in [
         ("fast_insecure (N=3, M=10)", ProofParams::fast_insecure()),
         ("low_n        (N=3, M=64)", ProofParams::low_n()),
         ("balanced     (N=3, M=96)", ProofParams::balanced()),
     ] {
-        let n = params.num_parties as f64;
-        let m = params.num_repetitions as f64;
-        let soundness_bits = m * (n / (n - 1.0)).log2();
-        let estimated = params.estimated_proof_bytes(2, 10);
+        let soundness_bits = params.soundness_bits();
+        let estimated = params.estimated_proof_bytes(&estimate_circuit, 1);
         println!(
-            "  {:30} soundness ≈ 2^{{-{:.1}}}  est. size ≈ {} KB",
+            "  {:30} prototype soundness ≈ 2^{{-{:.1}}}  est. size ≈ {} KB (upper bound)",
             label,
             soundness_bits,
             estimated / 1024
