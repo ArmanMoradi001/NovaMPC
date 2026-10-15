@@ -756,7 +756,7 @@ fn range_witness_vec(x: u32, lo: u32, hi: u32) -> Vec<u32> {
 }
 
 /// Helper: build the full SetMembership witness from a MerkleProof.
-fn set_membership_witness_vec(proof: &crate::merkle::MerkleProof) -> Vec<u32> {
+pub(crate) fn set_membership_witness_vec(proof: &crate::merkle::MerkleProof) -> Vec<u32> {
     let depth = proof.siblings.len();
     let mut w = Vec::with_capacity(2 + 2 * depth);
     w.push(proof.leaf);

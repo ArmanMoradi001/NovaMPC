@@ -17,9 +17,9 @@
 use sha3::{Digest, Sha3_256};
 
 use crate::fiat_shamir::hash_circuit;
-use crate::merkle::MerkleProof;
+use crate::merkle::{MerkleProof, MerkleTree};
 use crate::params::ProofParams;
-use crate::predicate::CompoundPredicate;
+use crate::predicate::{set_membership_witness_vec, CompoundPredicate, Predicate};
 use crate::proof::{self, Proof};
 use crate::{MpcithError, Result};
 
@@ -56,6 +56,12 @@ pub struct TransactionStatement {
 ///
 /// Contains exactly the secret data that the prover must supply and that
 /// the verifier never sees.
+///
+/// The `merkle_proof` is the membership witness used verbatim when building
+/// the proof: its leaf, index bits, and siblings become the SetMembership
+/// half of the compound witness. It must be a valid authentication path for
+/// `secret_value` under the statement's root (see
+/// [`create_transaction_proof`] for the exact checks).
 #[derive(Debug, Clone)]
 pub struct TransactionWitness {
     /// The actual private transfer amount or asset ID.
@@ -118,26 +124,128 @@ fn encode_public_inputs(statement: &TransactionStatement) -> Vec<u32> {
 /// Create a zero-knowledge proof for a transaction statement.
 ///
 /// Builds a compound `RangeCheck ∧ SetMembership` circuit from the statement,
-/// generates the witness from `witness.secret_value` and `witness.merkle_proof`,
-/// and runs the MPC-in-the-Head protocol.
+/// using the **supplied** `witness.merkle_proof` as the membership witness
+/// (leaf, index bits, siblings) and `witness.secret_value` for the range
+/// witness, then runs the MPC-in-the-Head protocol.
+///
+/// The supplied proof is validated before any proving work starts, and the
+/// statement's Merkle metadata is cross-checked against its `members` list.
+/// All failures return `Err`; this function never panics.
+///
+/// # Validation
+/// - `statement.members` is non-empty, and `MerkleTree::build(&members)`
+///   reproduces `statement.authorized_set_root` with depth
+///   `members.len().next_power_of_two().trailing_zeros() ==
+///   statement.merkle_depth`.
+/// - `witness.merkle_proof.leaf == witness.secret_value`.
+/// - `witness.merkle_proof.root == statement.authorized_set_root`.
+/// - `witness.merkle_proof.siblings.len() == statement.merkle_depth`.
+/// - `witness.merkle_proof.leaf_index < statement.members.len()`.
+/// - The supplied proof verifies natively (`MerkleProof::verify`).
+///
+/// The circuit is compiled from `statement.members`, which — given the
+/// consistency checks above — embeds the same root, depth, and member count
+/// that [`verify_transaction_proof`] recompiles via
+/// `range_and_membership_for_verify`, so both sides hash to the same circuit.
 ///
 /// # Errors
-/// - Returns `Err` if the secret value is outside the authorized range.
-/// - Returns `Err` if the Merkle proof does not verify against the statement's
-///   root (i.e. the value is not in the authorized set).
-/// - Returns `Err` if the members list is empty.
+/// - Returns `Err` if the statement's root/depth/count disagree with its
+///   `members` list.
+/// - Returns `Err` if the supplied Merkle proof is inconsistent with the
+///   secret value or the statement (wrong leaf, root, index, or path).
+/// - Returns `Err` if the secret value is outside the authorized range or
+///   otherwise does not satisfy the circuit.
 pub fn create_transaction_proof(
     statement: &TransactionStatement,
     witness: &TransactionWitness,
     params: &ProofParams,
 ) -> Result<Proof> {
     let (lo, hi) = statement.amount_range;
+    let members = &statement.members;
 
-    // Build the compound predicate.
-    let predicate = CompoundPredicate::range_and_membership(lo, hi, statement.members.clone());
+    // ── Statement metadata consistency ──────────────────────────────
+    // The statement still carries the full member list so the prover can
+    // compile the circuit; the root/depth/count must agree with it, exactly
+    // as the verifier will recompile them.
+    if members.is_empty() {
+        return Err(MpcithError::InvalidParams(
+            "Transaction statement has an empty authorized member list".into(),
+        ));
+    }
+    if statement.merkle_depth >= 32 {
+        return Err(MpcithError::InvalidParams(format!(
+            "Merkle depth {} out of supported range (must be < 32)",
+            statement.merkle_depth
+        )));
+    }
+    let expected_depth = members.len().next_power_of_two().trailing_zeros() as usize;
+    if statement.merkle_depth != expected_depth {
+        return Err(MpcithError::InvalidParams(format!(
+            "Statement merkle_depth {} inconsistent with {} members (expected depth {})",
+            statement.merkle_depth,
+            members.len(),
+            expected_depth
+        )));
+    }
+    if members.len() > (1usize << statement.merkle_depth) {
+        return Err(MpcithError::InvalidParams(format!(
+            "Member count {} inconsistent with Merkle depth {}",
+            members.len(),
+            statement.merkle_depth
+        )));
+    }
+    let expected_root = MerkleTree::build(members).root();
+    if statement.authorized_set_root != expected_root {
+        return Err(MpcithError::InvalidParams(
+            "Statement authorized_set_root does not match the root of its members list".into(),
+        ));
+    }
 
-    // Generate the full witness vector: range_witness ++ membership_witness.
-    let full_witness = predicate.generate_witness(witness.secret_value)?;
+    // ── Supplied Merkle proof validation ────────────────────────────
+    // The supplied proof is the membership witness; reject anything that
+    // does not authenticate secret_value under the statement's root.
+    let supplied = &witness.merkle_proof;
+    if supplied.leaf != witness.secret_value {
+        return Err(MpcithError::InvalidWitness(
+            "Supplied Merkle proof leaf does not equal the secret value".into(),
+        ));
+    }
+    if supplied.root != statement.authorized_set_root {
+        return Err(MpcithError::InvalidWitness(
+            "Supplied Merkle proof root does not match the statement's authorized set root".into(),
+        ));
+    }
+    if supplied.siblings.len() != statement.merkle_depth {
+        return Err(MpcithError::InvalidWitness(format!(
+            "Supplied Merkle proof has path length {} but statement requires depth {}",
+            supplied.siblings.len(),
+            statement.merkle_depth
+        )));
+    }
+    if supplied.leaf_index >= members.len() {
+        return Err(MpcithError::InvalidWitness(format!(
+            "Supplied Merkle proof index {} out of range for {} authorized members",
+            supplied.leaf_index,
+            members.len()
+        )));
+    }
+    if !supplied.verify() {
+        return Err(MpcithError::InvalidWitness(
+            "Supplied Merkle proof does not verify (wrong siblings for leaf/index/root)".into(),
+        ));
+    }
+
+    // Build the compound predicate from the validated member list. Because
+    // the checks above pin root/depth/count to the statement's values, this
+    // embeds the same circuit that verify_transaction_proof recompiles via
+    // range_and_membership_for_verify.
+    let predicate = CompoundPredicate::range_and_membership(lo, hi, members.clone());
+
+    // Membership witness comes from the supplied proof (leaf, index bits,
+    // siblings); range witness comes from the secret value.
+    let mut full_witness =
+        Predicate::RangeCheck { lo, hi }.generate_witness(witness.secret_value)?;
+    full_witness.extend_from_slice(&set_membership_witness_vec(supplied));
 
     // Encode public inputs with context binding.
     let public_inputs = encode_public_inputs(statement);
@@ -302,7 +410,8 @@ mod tests {
         };
 
         // secret_value = 100 is in range [1, 1000] but NOT in the authorized set.
-        // generate_witness for SetMembership will fail because 100 is not a member.
+        // The hand-built proof cannot authenticate leaf 100 under the set's
+        // root, so supplied-proof validation rejects it.
         let witness = TransactionWitness {
             secret_value: 100,
             merkle_proof: MerkleProof {
@@ -315,6 +424,147 @@ mod tests {
 
         let result = create_transaction_proof(&statement, &witness, &params);
         assert!(result.is_err(), "should reject unauthorized account");
+    }
+
+    // ── Supplied-proof regression: the witness's Merkle proof is the ──
+    //    membership witness (previously it was silently regenerated).
+
+    #[test]
+    fn test_supplied_proof_tampered_sibling_rejected() {
+        // 500 ∈ members, but the supplied path is corrupted. The old code
+        // regenerated a fresh proof from secret_value and would have
+        // succeeded; the fixed code must reject the supplied path.
+        let params = ProofParams::fast_insecure();
+        let (statement, witness, _members) = setup();
+
+        let mut bad = witness.clone();
+        bad.merkle_proof.siblings[0] ^= 1;
+
+        let result = create_transaction_proof(&statement, &bad, &params);
+        assert!(
+            result.is_err(),
+            "tampered supplied sibling path must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_supplied_proof_wrong_leaf_rejected() {
+        let params = ProofParams::fast_insecure();
+        let (statement, witness, _members) = setup();
+
+        // Leaf disagrees with the secret value (secret stays 500).
+        let mut bad = witness.clone();
+        bad.merkle_proof.leaf = 501;
+
+        let result = create_transaction_proof(&statement, &bad, &params);
+        assert!(result.is_err(), "proof leaf != secret must be rejected");
+    }
+
+    #[test]
+    fn test_supplied_proof_wrong_root_rejected() {
+        let params = ProofParams::fast_insecure();
+        let (statement, witness, _members) = setup();
+
+        // Proof rooted at a different tree than the statement.
+        let mut bad = witness.clone();
+        bad.merkle_proof.root ^= 1;
+
+        let result = create_transaction_proof(&statement, &bad, &params);
+        assert!(result.is_err(), "proof root != statement root must be rejected");
+
+        // Same, but with the statement root corrupted instead.
+        let mut bad_statement = statement.clone();
+        bad_statement.authorized_set_root ^= 1;
+        let result = create_transaction_proof(&bad_statement, &witness, &params);
+        assert!(result.is_err(), "statement root != proof root must be rejected");
+    }
+
+    #[test]
+    fn test_supplied_proof_wrong_index_rejected() {
+        let params = ProofParams::fast_insecure();
+        let (statement, witness, members) = setup();
+
+        // Out-of-range index: no such authorized member slot.
+        let mut bad = witness.clone();
+        bad.merkle_proof.leaf_index = members.len();
+        assert!(create_transaction_proof(&statement, &bad, &params).is_err());
+
+        // In-range but wrong index: leaf 500 opened at index 0 with
+        // index 0's path cannot verify.
+        let tree = MerkleTree::build(&members);
+        let mut mistargeted = tree.prove_membership(0);
+        mistargeted.leaf = 500;
+        let bad_witness = TransactionWitness {
+            secret_value: 500,
+            merkle_proof: mistargeted,
+        };
+        assert!(
+            create_transaction_proof(&statement, &bad_witness, &params).is_err(),
+            "leaf opened at the wrong index must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_supplied_proof_wrong_depth_rejected() {
+        let params = ProofParams::fast_insecure();
+        let (statement, witness, _members) = setup();
+
+        // Truncated sibling path: depth mismatch with the statement.
+        let mut bad = witness.clone();
+        bad.merkle_proof.siblings.pop();
+        assert!(
+            create_transaction_proof(&statement, &bad, &params).is_err(),
+            "short sibling path must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_statement_metadata_mismatch_rejected() {
+        let params = ProofParams::fast_insecure();
+        let (statement, witness, members) = setup();
+
+        // Wrong depth for a 4-member set.
+        let mut bad_depth = statement.clone();
+        bad_depth.merkle_depth = statement.merkle_depth + 1;
+        assert!(
+            create_transaction_proof(&bad_depth, &witness, &params).is_err(),
+            "wrong statement depth must be rejected"
+        );
+
+        // Member list that no longer matches the pinned root/depth.
+        let mut bad_members = statement.clone();
+        bad_members.members = {
+            let mut m = members.clone();
+            m.push(12345);
+            m
+        };
+        assert!(
+            create_transaction_proof(&bad_members, &witness, &params).is_err(),
+            "member list inconsistent with statement root/depth must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_supplied_proof_non_power_of_two_valid() {
+        // 5 members (padded to 8 leaves): an honest supplied proof must
+        // still prove and verify end to end.
+        let params = ProofParams::fast_insecure();
+        let members = vec![11u32, 22, 33, 44, 55];
+        let tree = MerkleTree::build(&members);
+        let statement = TransactionStatement {
+            amount_range: (1, 100),
+            authorized_set_root: tree.root(),
+            merkle_depth: members.len().next_power_of_two().trailing_zeros() as usize,
+            context: b"block-9-five-members".to_vec(),
+            members: members.clone(),
+        };
+        let witness = TransactionWitness {
+            secret_value: 55,
+            merkle_proof: tree.prove_membership(4),
+        };
+        let proof = create_transaction_proof(&statement, &witness, &params)
+            .expect("honest supplied proof for padded set must be provable");
+        assert!(verify_transaction_proof(&proof, &statement, &params).unwrap());
     }
 
     // ── F-6 regression: single-member authorized set (depth 0) ────────────
