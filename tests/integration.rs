@@ -82,7 +82,7 @@ fn test_range_and_membership_composition() {
 
     // ── SetMembership: 42 ∈ {10,20,30,42,50,60,70,80} ─────────────────────
     let members: Vec<u32> = vec![10, 20, 30, 42, 50, 60, 70, 80];
-    let tree = MerkleTree::build(&members);
+    let tree = MerkleTree::build(&members).unwrap();
     let root = tree.root();
     let leaf_idx = members.iter().position(|&v| v == x).unwrap();
     let merkle_proof = tree.prove_membership(leaf_idx);
@@ -137,7 +137,7 @@ fn test_proof_sizes_table() {
     };
 
     let members8: Vec<u32> = vec![10, 20, 30, 42, 50, 60, 70, 80];
-    let tree8 = MerkleTree::build(&members8);
+    let tree8 = MerkleTree::build(&members8).unwrap();
     let root8 = tree8.root();
     let mp8 = tree8.prove_membership(3);
     let membership = Case {
@@ -210,7 +210,7 @@ fn test_serialized_roundtrip_mul_heavy_predicates() {
     );
 
     let members: Vec<u32> = vec![10, 20, 30, 42, 50, 60, 70, 80];
-    let tree = MerkleTree::build(&members);
+    let tree = MerkleTree::build(&members).unwrap();
     let root = tree.root();
     let mp = tree.prove_membership(3);
     let mem_pred = Predicate::SetMembership { members };
@@ -227,7 +227,7 @@ fn test_serialized_roundtrip_mul_heavy_predicates() {
 fn test_membership_non_member_rejected() {
     let params = ProofParams::fast_insecure();
     let members: Vec<u32> = vec![10, 20, 30, 42];
-    let tree = MerkleTree::build(&members);
+    let tree = MerkleTree::build(&members).unwrap();
     let root = tree.root();
 
     // Attempt to prove membership of 99, which is NOT in the set.
@@ -465,7 +465,7 @@ fn test_proof_size_blowup_diagnostic() {
     // ── SetMembership(8) ──────────────────────────────────────────────────
     {
         let members: Vec<u32> = vec![10, 20, 30, 42, 50, 60, 70, 80];
-        let tree = MerkleTree::build(&members);
+        let tree = MerkleTree::build(&members).unwrap();
         let root = tree.root();
         let pred = Predicate::SetMembership { members };
         let compiled = pred.compile().unwrap();
@@ -592,7 +592,7 @@ fn test_h2_proof_for_p_cannot_be_substituted_as_q() {
 
     // Compound Q is also out of reach for a simple-P proof.
     let members = vec![10u32, 20, 30, 42];
-    let root = MerkleTree::build(&members).root();
+    let root = MerkleTree::build(&members).unwrap().root();
     let q3 = CompoundPredicate::range_and_membership(0, 100, members);
     assert!(
         verify_compound(&q3, &proof_p, &[0, 100, root], &params).is_err(),
@@ -621,7 +621,7 @@ fn test_h2_valid_compound_proofs_still_verify() {
     let compound = CompoundPredicate::range_and_membership(0, 100, members.clone());
 
     let witness = compound.generate_witness(42).unwrap();
-    let root = MerkleTree::build(&members).root();
+    let root = MerkleTree::build(&members).unwrap().root();
     let public_inputs = vec![0u32, 100, root];
 
     let proof = prove_compound(compound.clone(), &witness, &public_inputs, &params).unwrap();
@@ -636,7 +636,7 @@ fn test_h2_valid_compound_proofs_still_verify() {
 fn test_h2_transaction_verification_still_works() {
     let params = ProofParams::fast_insecure();
     let members = vec![10u32, 20, 500, 999];
-    let tree = MerkleTree::build(&members);
+    let tree = MerkleTree::build(&members).unwrap();
     let depth = members.len().next_power_of_two().trailing_zeros() as usize;
 
     let statement = TransactionStatement {

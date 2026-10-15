@@ -48,7 +48,17 @@ impl MerkleTree {
     ///
     /// If `leaves.len()` is not a power of two it is rounded up to the next
     /// power of two by padding with zeros.
-    pub fn build(leaves: &[u32]) -> Self {
+    ///
+    /// # Errors
+    /// Returns `InvalidParams` if `leaves` is empty. An empty tree has no
+    /// root and no provable positions, so construction fails instead of
+    /// producing a degenerate tree (or panicking downstream).
+    pub fn build(leaves: &[u32]) -> crate::Result<Self> {
+        if leaves.is_empty() {
+            return Err(crate::MpcithError::InvalidParams(
+                "Cannot build a Merkle tree from an empty leaf set".into(),
+            ));
+        }
         let n = leaves.len().next_power_of_two();
         let depth = n.trailing_zeros() as usize;
         let base = 1usize << depth;
@@ -74,11 +84,11 @@ impl MerkleTree {
             }
         }
 
-        Self {
+        Ok(Self {
             leaves: leaves_padded,
             nodes,
             depth,
-        }
+        })
     }
 
     /// Return the Merkle root.
@@ -113,17 +123,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_empty_build_returns_error() {
+        // An empty leaf set has no root and no provable positions:
+        // construction must fail with a clear error, never panic and never
+        // produce a degenerate tree.
+        let result = MerkleTree::build(&[]);
+        assert!(
+            matches!(result, Err(crate::MpcithError::InvalidParams(_))),
+            "empty build must return InvalidParams"
+        );
+    }
+
+    #[test]
+    fn test_single_leaf_tree_preserved() {
+        // Depth-0 tree: the root IS the leaf and its (empty) path verifies.
+        let tree = MerkleTree::build(&[42]).unwrap();
+        assert_eq!(tree.root(), 42);
+        let proof = tree.prove_membership(0);
+        assert!(proof.verify(), "single-leaf proof must verify");
+    }
+
+    #[test]
+    fn test_three_leaves_padded_preserved() {
+        // Non-power-of-two sets pad with zeros; every real member keeps a
+        // valid authentication path.
+        let tree = MerkleTree::build(&[7, 8, 9]).unwrap();
+        for i in 0..3 {
+            assert!(
+                tree.prove_membership(i).verify(),
+                "proof for leaf {i} of padded set failed"
+            );
+        }
+    }
+
+    #[test]
     fn test_four_leaves_deterministic_root() {
-        let tree = MerkleTree::build(&[10, 20, 30, 42]);
+        let tree = MerkleTree::build(&[10, 20, 30, 42]).unwrap();
         let root1 = tree.root();
-        let root2 = MerkleTree::build(&[10, 20, 30, 42]).root();
+        let root2 = MerkleTree::build(&[10, 20, 30, 42]).unwrap().root();
         assert_eq!(root1, root2);
         assert_ne!(root1, 0);
     }
 
     #[test]
     fn test_four_leaves_all_proofs_valid() {
-        let tree = MerkleTree::build(&[10, 20, 30, 42]);
+        let tree = MerkleTree::build(&[10, 20, 30, 42]).unwrap();
         for i in 0..4 {
             let proof = tree.prove_membership(i);
             assert!(proof.verify(), "proof for leaf {i} failed");
@@ -132,7 +176,7 @@ mod tests {
 
     #[test]
     fn test_tampered_sibling_fails() {
-        let tree = MerkleTree::build(&[10, 20, 30, 42]);
+        let tree = MerkleTree::build(&[10, 20, 30, 42]).unwrap();
         let mut proof = tree.prove_membership(1);
         proof.siblings[0] ^= 1;
         assert!(!proof.verify());
@@ -140,7 +184,7 @@ mod tests {
 
     #[test]
     fn test_tampered_leaf_fails() {
-        let tree = MerkleTree::build(&[10, 20, 30, 42]);
+        let tree = MerkleTree::build(&[10, 20, 30, 42]).unwrap();
         let mut proof = tree.prove_membership(2);
         proof.leaf = 99;
         assert!(!proof.verify());
@@ -149,12 +193,12 @@ mod tests {
     #[test]
     fn test_eight_leaves() {
         let vals: Vec<u32> = (1..=8).collect();
-        let tree = MerkleTree::build(&vals);
+        let tree = MerkleTree::build(&vals).unwrap();
         let root = tree.root();
         assert_ne!(root, 0);
 
         // Rebuild is deterministic.
-        assert_eq!(root, MerkleTree::build(&vals).root());
+        assert_eq!(root, MerkleTree::build(&vals).unwrap().root());
 
         for i in 0..8 {
             let proof = tree.prove_membership(i);

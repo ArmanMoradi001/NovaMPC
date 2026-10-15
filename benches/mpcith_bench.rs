@@ -74,7 +74,7 @@ fn bench_set_membership(c: &mut Criterion) {
 
     for set_size in [4usize, 8, 16, 32] {
         let members: Vec<u32> = (0..set_size as u32).map(|i| i * 10 + 1).collect();
-        let tree = MerkleTree::build(&members);
+        let tree = MerkleTree::build(&members).unwrap();
         let leaf_idx = set_size / 2;
         let proof_merkle = tree.prove_membership(leaf_idx);
 
@@ -114,7 +114,7 @@ fn bench_transaction_proof(c: &mut Criterion) {
     let params = ProofParams::balanced();
 
     let members: Vec<u32> = vec![10, 20, 500, 999];
-    let tree = MerkleTree::build(&members);
+    let tree = MerkleTree::build(&members).unwrap();
     let root = tree.root();
     let merkle_proof = tree.prove_membership(2);
 
@@ -187,7 +187,7 @@ fn bench_compound_predicate(c: &mut Criterion) {
     let params = ProofParams::balanced();
 
     let members: Vec<u32> = (0..8u32).map(|i| i * 10 + 1).collect();
-    let tree = MerkleTree::build(&members);
+    let tree = MerkleTree::build(&members).unwrap();
     let root = tree.root();
     let merkle_proof = tree.prove_membership(3);
 
@@ -314,7 +314,7 @@ fn bench_by_param_set(c: &mut Criterion) {
 
         // -- Compound Range+Membership --
         let members: Vec<u32> = (0..8u32).map(|i| i * 10 + 1).collect();
-        let tree = MerkleTree::build(&members);
+        let tree = MerkleTree::build(&members).unwrap();
         let root = tree.root();
         let merkle_proof = tree.prove_membership(3);
 

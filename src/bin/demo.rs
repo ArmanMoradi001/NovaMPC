@@ -89,7 +89,7 @@ fn main() {
     // SetMembership witness is [leaf, index, bit_0..bit_{d-1}, siblings];
     // the sole public input is the Merkle root.
     let members = vec![10u32, 20, 30, 42, 100];
-    let demo_tree = mpcith_zk::merkle::MerkleTree::build(&members);
+    let demo_tree = mpcith_zk::merkle::MerkleTree::build(&members).unwrap();
     let demo_root = demo_tree.root();
     let demo_idx = members.iter().position(|&v| v == 42).unwrap();
     let demo_mp = demo_tree.prove_membership(demo_idx);

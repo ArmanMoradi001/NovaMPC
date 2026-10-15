@@ -77,7 +77,7 @@ impl Predicate {
                             "Value {secret_value} is not in the member set"
                         ))
                     })?;
-                let tree = MerkleTree::build(members);
+                let tree = MerkleTree::build(members)?;
                 let proof = tree.prove_membership(idx);
                 Ok(set_membership_witness_vec(&proof))
             }
@@ -583,7 +583,7 @@ fn compile_set_membership(members: &[u32]) -> crate::Result<CompiledPredicate> {
         ));
     }
 
-    let tree = MerkleTree::build(members);
+    let tree = MerkleTree::build(members)?;
     let root = tree.root();
     let depth = members.len().next_power_of_two().trailing_zeros() as usize;
     if depth >= 32 {
@@ -810,7 +810,7 @@ mod tests {
     #[test]
     fn test_set_membership_predicate() {
         let members = vec![10u32, 20, 30, 42];
-        let tree = MerkleTree::build(&members);
+        let tree = MerkleTree::build(&members).unwrap();
         let root = tree.root();
         let pred = Predicate::SetMembership { members };
         let compiled = pred.compile().unwrap();
@@ -932,7 +932,7 @@ mod tests {
         let compound = CompoundPredicate::range_and_membership(0, 100, members.clone());
         let compiled = compound.compile().unwrap();
 
-        let tree = MerkleTree::build(&members);
+        let tree = MerkleTree::build(&members).unwrap();
         let proof = tree.prove_membership(3);
         let sm_witness = set_membership_witness(&proof);
         let range_w = range_witness(42, 0, 100);
@@ -949,7 +949,7 @@ mod tests {
         let compound = CompoundPredicate::range_and_membership(0, 100, members.clone());
         let compiled = compound.compile().unwrap();
 
-        let tree = MerkleTree::build(&members);
+        let tree = MerkleTree::build(&members).unwrap();
         let proof = tree.prove_membership(3);
         let sm_witness = set_membership_witness(&proof);
         let range_w = range_witness(200, 0, 100);
@@ -966,7 +966,7 @@ mod tests {
         let compound = CompoundPredicate::range_and_membership(0, 100, members.clone());
         let compiled = compound.compile().unwrap();
 
-        let tree = MerkleTree::build(&members);
+        let tree = MerkleTree::build(&members).unwrap();
         let range_w = range_witness(50, 0, 100);
 
         // Build a membership witness with leaf=50 (NOT in the set).
@@ -987,7 +987,7 @@ mod tests {
         let compound = CompoundPredicate::range_and_membership(0, 100, members.clone());
         let compiled = compound.compile().unwrap();
 
-        let tree = MerkleTree::build(&members);
+        let tree = MerkleTree::build(&members).unwrap();
         let proof = tree.prove_membership(3);
         let sm_witness = set_membership_witness(&proof);
         let range_w = range_witness(200, 0, 100);
@@ -1119,7 +1119,7 @@ mod tests {
     /// Witness for an arbitrary (leaf, leaf_index) against the tree built
     /// from `members` — lets tests aim at padded slots directly.
     fn membership_witness_at(members: &[u32], idx: usize, leaf: u32) -> Vec<u32> {
-        let tree = MerkleTree::build(members);
+        let tree = MerkleTree::build(members).unwrap();
         let mp = tree.prove_membership(idx);
         let depth = mp.siblings.len();
         let mut w = vec![leaf, idx as u32];
@@ -1250,7 +1250,7 @@ mod tests {
             .compile()
             .unwrap();
 
-        let tree = MerkleTree::build(&members);
+        let tree = MerkleTree::build(&members).unwrap();
         let root = tree.root();
         let depth = members.len().next_power_of_two().trailing_zeros() as usize;
 
@@ -1295,7 +1295,7 @@ mod tests {
     #[test]
     fn test_f6_depth0_circuit_is_leaf_eq_root_and_symmetric() {
         let members = vec![42u32];
-        let tree = MerkleTree::build(&members);
+        let tree = MerkleTree::build(&members).unwrap();
         assert_eq!(tree.root(), 42, "single-leaf tree root must be the member");
 
         // Prover-side circuit: leaf == root, no hash/path gates.
@@ -1345,7 +1345,7 @@ mod tests {
         let params = crate::params::ProofParams::fast_insecure();
         let members = vec![42u32];
         let pred = Predicate::SetMembership { members: members.clone() };
-        let tree = MerkleTree::build(&members);
+        let tree = MerkleTree::build(&members).unwrap();
         let root = tree.root();
 
         let w = set_membership_witness_vec(&tree.prove_membership(0));
@@ -1364,7 +1364,7 @@ mod tests {
         // members = [42], secret = 43 → MUST fail at every level.
         let params = crate::params::ProofParams::fast_insecure();
         let members = vec![42u32];
-        let tree = MerkleTree::build(&members);
+        let tree = MerkleTree::build(&members).unwrap();
         let root = tree.root();
         let pred = Predicate::SetMembership { members };
 
@@ -1386,7 +1386,7 @@ mod tests {
         let members = vec![42u32];
         let compound = CompoundPredicate::range_and_membership(0, 100, members.clone());
         let witness = compound.generate_witness(42).unwrap();
-        let public_inputs = vec![0u32, 100, MerkleTree::build(&members).root()];
+        let public_inputs = vec![0u32, 100, MerkleTree::build(&members).unwrap().root()];
         let proof = crate::prove_compound(compound.clone(), &witness, &public_inputs, &params)
             .expect("single-member compound proof must exist");
         assert!(
@@ -1454,7 +1454,7 @@ mod tests {
             assert_eq!(pred.witness_size(), 2 + 2 * depth, "members={members:?}");
             assert_eq!(compiled.witness_size, 2 + 2 * depth);
             assert_eq!(compiled.circuit.num_inputs, 2 + 2 * depth);
-            let tree = MerkleTree::build(&members);
+            let tree = MerkleTree::build(&members).unwrap();
             let mp = tree.prove_membership(0);
             assert_eq!(set_membership_witness_vec(&mp).len(), 2 + 2 * depth);
         }

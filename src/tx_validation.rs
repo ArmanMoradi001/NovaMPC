@@ -319,7 +319,7 @@ mod tests {
     /// Helper: build a 4-leaf authorized set and statement for range [1, 1000].
     fn setup() -> (TransactionStatement, TransactionWitness, Vec<u32>) {
         let members = vec![10u32, 20, 500, 999];
-        let tree = MerkleTree::build(&members);
+        let tree = MerkleTree::build(&members).unwrap();
         let root = tree.root();
         let depth = members.len().next_power_of_two().trailing_zeros() as usize;
 
@@ -370,7 +370,7 @@ mod tests {
     fn test_transaction_proof_amount_out_of_range() {
         let params = ProofParams::fast_insecure();
         let members = vec![10u32, 20, 500, 999];
-        let tree = MerkleTree::build(&members);
+        let tree = MerkleTree::build(&members).unwrap();
         let root = tree.root();
         let depth = members.len().next_power_of_two().trailing_zeros() as usize;
 
@@ -397,7 +397,7 @@ mod tests {
     fn test_transaction_proof_unauthorized_account() {
         let params = ProofParams::fast_insecure();
         let members = vec![10u32, 20, 500, 999];
-        let tree = MerkleTree::build(&members);
+        let tree = MerkleTree::build(&members).unwrap();
         let root = tree.root();
         let depth = members.len().next_power_of_two().trailing_zeros() as usize;
 
@@ -491,7 +491,7 @@ mod tests {
 
         // In-range but wrong index: leaf 500 opened at index 0 with
         // index 0's path cannot verify.
-        let tree = MerkleTree::build(&members);
+        let tree = MerkleTree::build(&members).unwrap();
         let mut mistargeted = tree.prove_membership(0);
         mistargeted.leaf = 500;
         let bad_witness = TransactionWitness {
@@ -554,7 +554,7 @@ mod tests {
         // still prove and verify end to end.
         let params = ProofParams::fast_insecure();
         let members = vec![11u32, 22, 33, 44, 55];
-        let tree = MerkleTree::build(&members);
+        let tree = MerkleTree::build(&members).unwrap();
         let statement = TransactionStatement {
             amount_range: (1, 100),
             authorized_set_root: tree.root(),
@@ -639,7 +639,7 @@ mod tests {
 
     fn single_member_statement() -> TransactionStatement {
         let members = vec![42u32];
-        let tree = MerkleTree::build(&members);
+        let tree = MerkleTree::build(&members).unwrap();
         TransactionStatement {
             amount_range: (0, 100),
             authorized_set_root: tree.root(),
@@ -657,7 +657,7 @@ mod tests {
 
         let witness = TransactionWitness {
             secret_value: 42,
-            merkle_proof: MerkleTree::build(&[42u32]).prove_membership(0),
+            merkle_proof: MerkleTree::build(&[42u32]).unwrap().prove_membership(0),
         };
 
         let proof = create_transaction_proof(&statement, &witness, &params)
@@ -675,7 +675,7 @@ mod tests {
 
         let witness = TransactionWitness {
             secret_value: 43,
-            merkle_proof: MerkleTree::build(&[42u32]).prove_membership(0),
+            merkle_proof: MerkleTree::build(&[42u32]).unwrap().prove_membership(0),
         };
 
         let result = create_transaction_proof(&statement, &witness, &params);
@@ -699,7 +699,7 @@ mod tests {
     fn test_h4_context_binding_is_256_bits() {
         // Public inputs must carry lo, hi, root plus all 8 context words.
         let members = vec![10u32, 20, 500, 999];
-        let root = MerkleTree::build(&members).root();
+        let root = MerkleTree::build(&members).unwrap().root();
         let statement = TransactionStatement {
             amount_range: (1, 1000),
             authorized_set_root: root,
@@ -741,7 +741,7 @@ mod tests {
     fn test_h4_empty_context_proof_verifies_only_with_empty_context() {
         let params = ProofParams::fast_insecure();
         let members = vec![10u32, 20, 500, 999];
-        let tree = MerkleTree::build(&members);
+        let tree = MerkleTree::build(&members).unwrap();
         let statement = TransactionStatement {
             amount_range: (1, 1000),
             authorized_set_root: tree.root(),

@@ -1150,7 +1150,7 @@ mod tests {
     fn test_set_membership_prove_verify() {
         let params = fast_params();
         let members = vec![10u32, 20, 30, 42];
-        let tree = crate::merkle::MerkleTree::build(&members);
+        let tree = crate::merkle::MerkleTree::build(&members).unwrap();
         let root = tree.root();
         let pred = Predicate::SetMembership { members };
 
@@ -1261,7 +1261,7 @@ mod tests {
         let witness = compound.generate_witness(42).unwrap();
 
         // public_inputs = [lo, hi, root]
-        let tree = crate::merkle::MerkleTree::build(&members);
+        let tree = crate::merkle::MerkleTree::build(&members).unwrap();
         let root = tree.root();
         let public_inputs = vec![0u32, 100, root];
 
@@ -1277,7 +1277,7 @@ mod tests {
 
         let witness = compound.generate_witness(42).unwrap();
 
-        let tree = crate::merkle::MerkleTree::build(&members);
+        let tree = crate::merkle::MerkleTree::build(&members).unwrap();
         let root = tree.root();
         let public_inputs = vec![0u32, 100, root];
 
@@ -1297,7 +1297,7 @@ mod tests {
         let compound = CompoundPredicate::range_and_membership(0, 100, members.clone());
 
         // Manually build witness: range for 200 (invalid) + valid membership for 42.
-        let tree = crate::merkle::MerkleTree::build(&members);
+        let tree = crate::merkle::MerkleTree::build(&members).unwrap();
         let merkle_proof = tree.prove_membership(3);
         let mut witness = range_witness(200, 0, 100);
         witness.extend_from_slice(&set_membership_witness(&merkle_proof));
@@ -1326,7 +1326,7 @@ mod tests {
         let compound_a = CompoundPredicate::range_and_membership(0, 100, members_a.clone());
 
         let witness = compound_a.generate_witness(42).unwrap();
-        let tree_a = crate::merkle::MerkleTree::build(&members_a);
+        let tree_a = crate::merkle::MerkleTree::build(&members_a).unwrap();
         let root_a = tree_a.root();
         let public_inputs_a = vec![0u32, 100, root_a];
 
@@ -1335,7 +1335,7 @@ mod tests {
 
         // Verify with a DIFFERENT member set B (different root)
         let members_b = vec![5u32, 15, 25, 42];
-        let tree_b = crate::merkle::MerkleTree::build(&members_b);
+        let tree_b = crate::merkle::MerkleTree::build(&members_b).unwrap();
         let root_b = tree_b.root();
         let public_inputs_b = vec![0u32, 100, root_b];
 
@@ -1527,7 +1527,7 @@ mod tests {
     /// Members {10,20,30,42} with Merkle root; 42 sits at index 3.
     fn c3_setup() -> (crate::merkle::MerkleTree, Vec<u32>, Vec<u32>) {
         let members = vec![10u32, 20, 30, 42];
-        let tree = crate::merkle::MerkleTree::build(&members);
+        let tree = crate::merkle::MerkleTree::build(&members).unwrap();
         let root = tree.root();
         let public_inputs = vec![0u32, 100, root]; // [lo, hi, root]
         (tree, members, public_inputs)
@@ -1634,7 +1634,7 @@ mod tests {
         let params = fast_params();
         let members = f1_members();
         let pred = Predicate::SetMembership { members: members.clone() };
-        let tree = crate::merkle::MerkleTree::build(&members);
+        let tree = crate::merkle::MerkleTree::build(&members).unwrap();
         let root = tree.root();
         for idx in 0..members.len() {
             let w = set_membership_witness(&tree.prove_membership(idx));
@@ -1652,7 +1652,7 @@ mod tests {
     fn test_f1_end_to_end_padded_zero_prove_rejected() {
         let params = fast_params();
         let members = f1_members();
-        let tree = crate::merkle::MerkleTree::build(&members);
+        let tree = crate::merkle::MerkleTree::build(&members).unwrap();
         let root = tree.root();
         let pred = Predicate::SetMembership { members };
 
@@ -1683,7 +1683,7 @@ mod tests {
         use rand::RngCore;
 
         let members = f1_members();
-        let tree = crate::merkle::MerkleTree::build(&members);
+        let tree = crate::merkle::MerkleTree::build(&members).unwrap();
         let root = tree.root();
         let pred = Predicate::SetMembership { members };
         let compiled = pred.compile().unwrap(); // includes the F-1 index bound
@@ -1826,7 +1826,7 @@ mod tests {
     #[test]
     fn test_f1_manual_forged_padded_index_proof_rejected() {
         let members = f1_members();
-        let root = crate::merkle::MerkleTree::build(&members).root();
+        let root = crate::merkle::MerkleTree::build(&members).unwrap().root();
 
         // Balanced params: per-proof acceptance probability 3^{-96} ≈ 4.6e-46.
         let balanced = ProofParams::balanced();
@@ -1854,7 +1854,7 @@ mod tests {
         let params = fast_params();
         let members = f1_members();
         let pred = Predicate::SetMembership { members };
-        let tree = crate::merkle::MerkleTree::build(&f1_members());
+        let tree = crate::merkle::MerkleTree::build(&f1_members()).unwrap();
         let root = tree.root();
 
         // Honest proof for real member 8 (index 1).
@@ -1959,7 +1959,7 @@ mod tests {
         assert!(verify_predicate(&Predicate::XorCheck { expected_xor: x ^ y }, &px, &[x ^ y], &params).unwrap());
 
         let members = f1_members();
-        let tree = crate::merkle::MerkleTree::build(&members);
+        let tree = crate::merkle::MerkleTree::build(&members).unwrap();
         let root = tree.root();
         let pw = prove(
             Predicate::SetMembership { members: members.clone() },
