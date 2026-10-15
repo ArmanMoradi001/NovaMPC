@@ -178,12 +178,13 @@ use mpcith_zk::tx_validation::{
 
 let members = vec![10u32, 20, 42, 100];
 let tree = MerkleTree::build(&members);
+// The verifier needs only root, depth, and member count — not the list.
 let statement = TransactionStatement {
     amount_range: (0, 1000),
     authorized_set_root: tree.root(),
     merkle_depth: members.len().next_power_of_two().trailing_zeros() as usize,
+    num_members: members.len(),
     context: b"block-123".to_vec(),
-    members,
 };
 
 let witness = TransactionWitness {

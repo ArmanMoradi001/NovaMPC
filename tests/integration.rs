@@ -643,8 +643,8 @@ fn test_h2_transaction_verification_still_works() {
         amount_range: (1, 1000),
         authorized_set_root: tree.root(),
         merkle_depth: depth,
+        num_members: members.len(),
         context: b"h2-block-42".to_vec(),
-        members: members.clone(),
     };
     let witness = TransactionWitness {
         secret_value: 500,

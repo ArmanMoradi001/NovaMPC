@@ -125,8 +125,8 @@ fn bench_transaction_proof(c: &mut Criterion) {
                     amount_range: (1, 1000),
                     authorized_set_root: root,
                     merkle_depth: 2,
+                    num_members: members.len(),
                     context: b"bench-block-42".to_vec(),
-                    members: members.clone(),
                 }),
                 black_box(&mpcith_zk::tx_validation::TransactionWitness {
                     secret_value: 500,
@@ -143,8 +143,8 @@ fn bench_transaction_proof(c: &mut Criterion) {
             amount_range: (1, 1000),
             authorized_set_root: root,
             merkle_depth: 2,
+            num_members: members.len(),
             context: b"bench-block-42".to_vec(),
-            members: members.clone(),
         },
         &mpcith_zk::tx_validation::TransactionWitness {
             secret_value: 500,
@@ -158,8 +158,8 @@ fn bench_transaction_proof(c: &mut Criterion) {
         amount_range: (1, 1000),
         authorized_set_root: root,
         merkle_depth: 2,
+        num_members: members.len(),
         context: b"bench-block-42".to_vec(),
-        members,
     };
 
     group.bench_function("verify", |b| {
