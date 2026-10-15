@@ -359,7 +359,13 @@ pub fn prove_compound(
 }
 
 /// Core proving logic shared by `prove` and `prove_compound`.
-fn prove_compiled(
+///
+/// Crate-internal callers (e.g. transaction proofs compiled from public
+/// `(root, depth, num_members)` instead of a member list) may invoke this
+/// directly with an already-compiled circuit. It is deliberately
+/// `pub(crate)`: external callers must go through the predicate-bound
+/// `prove` / `prove_compound` entry points.
+pub(crate) fn prove_compiled(
     compiled: &CompiledPredicate,
     witness: &[u32],
     public_inputs: &[u32],

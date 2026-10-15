@@ -17,7 +17,7 @@
 use sha3::{Digest, Sha3_256};
 
 use crate::fiat_shamir::hash_circuit;
-use crate::merkle::{MerkleProof, MerkleTree};
+use crate::merkle::MerkleProof;
 use crate::params::ProofParams;
 use crate::predicate::{set_membership_witness_vec, CompoundPredicate, Predicate};
 use crate::proof::{self, Proof};
@@ -31,6 +31,12 @@ use crate::{MpcithError, Result};
 /// The statement encodes: "the secret value lies in `amount_range` AND
 /// belongs to the Merkle-authenticated set with root `authorized_set_root`,
 /// bound to `context`."
+///
+/// The verifier needs only the Merkle `authorized_set_root`, `merkle_depth`,
+/// and `num_members` — never the full authorized member list. `num_members`
+/// is the true length of the set the root was built from; it is baked into
+/// the circuit's index-bound constraint (`leaf_index < num_members`), so a
+/// wrong count compiles a different circuit and fails closed.
 #[derive(Debug, Clone)]
 pub struct TransactionStatement {
     /// The authorized transfer range `(lo, hi)` inclusive.
@@ -42,14 +48,14 @@ pub struct TransactionStatement {
     /// Depth of the Merkle tree (log₂ of the padded leaf count).
     /// Needed to reconstruct witness layout for the verifier.
     pub merkle_depth: usize,
+    /// Number of members in the authorized set the root was built from.
+    /// Must satisfy `1 <= num_members <= 2^merkle_depth`; it is a public
+    /// constant inside the circuit's index-bound constraint.
+    pub num_members: usize,
     /// Additional public context bound into the Fiat-Shamir transcript
     /// to prevent cross-transaction proof replay.  Typical values: block
     /// hash, channel ID, chaincode invocation ID.
     pub context: Vec<u8>,
-    /// The full authorized member set.  Required at proving time to
-    /// compile the SetMembership circuit.  The verifier does NOT need
-    /// this — the root is embedded in the proof's circuit.
-    pub members: Vec<u32>,
 }
 
 /// Private witness for a transaction proof.
@@ -119,38 +125,59 @@ fn encode_public_inputs(statement: &TransactionStatement) -> Vec<u32> {
     inputs
 }
 
-// ─── Core API ─────────────────────────────────────────────────────────────────
+/// Validate the public membership parameters before any proving or
+/// verification work.
+///
+/// Rejects empty sets and `(depth, num_members)` pairs that cannot describe
+/// a real Merkle tree. Runs first in both [`create_transaction_proof`] and
+/// [`verify_transaction_proof`] so inconsistent statements fail fast,
+/// before circuit compilation or MPC emulation. The in-circuit index bound
+/// (`leaf_index < num_members`) itself is unchanged.
+fn validate_membership_params(num_members: usize, depth: usize) -> Result<()> {
+    if num_members == 0 {
+        return Err(MpcithError::InvalidParams(
+            "Transaction statement has an empty authorized set (num_members == 0)".into(),
+        ));
+    }
+    if depth >= 32 {
+        return Err(MpcithError::InvalidParams(format!(
+            "Merkle depth {depth} out of supported range (must be < 32)"
+        )));
+    }
+    if num_members > (1usize << depth) {
+        return Err(MpcithError::InvalidParams(format!(
+            "Member count {num_members} inconsistent with Merkle depth {depth}"
+        )));
+    }
+    Ok(())
+}
 
 /// Create a zero-knowledge proof for a transaction statement.
 ///
-/// Builds a compound `RangeCheck ∧ SetMembership` circuit from the statement,
-/// using the **supplied** `witness.merkle_proof` as the membership witness
-/// (leaf, index bits, siblings) and `witness.secret_value` for the range
-/// witness, then runs the MPC-in-the-Head protocol.
+/// Compiles the compound `RangeCheck ∧ SetMembership` circuit from the
+/// statement's public `(root, depth, num_members)` — the exact same
+/// compilation the verifier performs — using the **supplied**
+/// `witness.merkle_proof` as the membership witness (leaf, index bits,
+/// siblings) and `witness.secret_value` for the range witness, then runs
+/// the MPC-in-the-Head protocol over the crate-internal compiled-circuit
+/// path. No member list is needed: the authentication path in the witness
+/// carries the membership evidence.
 ///
-/// The supplied proof is validated before any proving work starts, and the
-/// statement's Merkle metadata is cross-checked against its `members` list.
-/// All failures return `Err`; this function never panics.
+/// The statement and the supplied proof are validated before any proving
+/// work starts. All failures return `Err`; this function never panics.
 ///
 /// # Validation
-/// - `statement.members` is non-empty, and `MerkleTree::build(&members)`
-///   reproduces `statement.authorized_set_root` with depth
-///   `members.len().next_power_of_two().trailing_zeros() ==
-///   statement.merkle_depth`.
+/// - `(num_members, merkle_depth)` is a consistent pair: non-empty and
+///   `num_members <= 2^merkle_depth`.
 /// - `witness.merkle_proof.leaf == witness.secret_value`.
 /// - `witness.merkle_proof.root == statement.authorized_set_root`.
 /// - `witness.merkle_proof.siblings.len() == statement.merkle_depth`.
-/// - `witness.merkle_proof.leaf_index < statement.members.len()`.
+/// - `witness.merkle_proof.leaf_index < statement.num_members`.
 /// - The supplied proof verifies natively (`MerkleProof::verify`).
 ///
-/// The circuit is compiled from `statement.members`, which — given the
-/// consistency checks above — embeds the same root, depth, and member count
-/// that [`verify_transaction_proof`] recompiles via
-/// `range_and_membership_for_verify`, so both sides hash to the same circuit.
-///
 /// # Errors
-/// - Returns `Err` if the statement's root/depth/count disagree with its
-///   `members` list.
+/// - Returns `Err` for an empty set or an inconsistent
+///   `(depth, num_members)` pair.
 /// - Returns `Err` if the supplied Merkle proof is inconsistent with the
 ///   secret value or the statement (wrong leaf, root, index, or path).
 /// - Returns `Err` if the secret value is outside the authorized range or
@@ -161,45 +188,10 @@ pub fn create_transaction_proof(
     params: &ProofParams,
 ) -> Result<Proof> {
     let (lo, hi) = statement.amount_range;
-    let members = &statement.members;
 
-    // ── Statement metadata consistency ──────────────────────────────
-    // The statement still carries the full member list so the prover can
-    // compile the circuit; the root/depth/count must agree with it, exactly
-    // as the verifier will recompile them.
-    if members.is_empty() {
-        return Err(MpcithError::InvalidParams(
-            "Transaction statement has an empty authorized member list".into(),
-        ));
-    }
-    if statement.merkle_depth >= 32 {
-        return Err(MpcithError::InvalidParams(format!(
-            "Merkle depth {} out of supported range (must be < 32)",
-            statement.merkle_depth
-        )));
-    }
-    let expected_depth = members.len().next_power_of_two().trailing_zeros() as usize;
-    if statement.merkle_depth != expected_depth {
-        return Err(MpcithError::InvalidParams(format!(
-            "Statement merkle_depth {} inconsistent with {} members (expected depth {})",
-            statement.merkle_depth,
-            members.len(),
-            expected_depth
-        )));
-    }
-    if members.len() > (1usize << statement.merkle_depth) {
-        return Err(MpcithError::InvalidParams(format!(
-            "Member count {} inconsistent with Merkle depth {}",
-            members.len(),
-            statement.merkle_depth
-        )));
-    }
-    let expected_root = MerkleTree::build(members).root();
-    if statement.authorized_set_root != expected_root {
-        return Err(MpcithError::InvalidParams(
-            "Statement authorized_set_root does not match the root of its members list".into(),
-        ));
-    }
+    // Fail fast on empty sets and inconsistent (depth, count) pairs,
+    // before compiling the circuit or running any MPC emulation.
+    validate_membership_params(statement.num_members, statement.merkle_depth)?;
 
     // ── Supplied Merkle proof validation ────────────────────────────
     // The supplied proof is the membership witness; reject anything that
@@ -222,11 +214,10 @@ pub fn create_transaction_proof(
             statement.merkle_depth
         )));
     }
-    if supplied.leaf_index >= members.len() {
+    if supplied.leaf_index >= statement.num_members {
         return Err(MpcithError::InvalidWitness(format!(
             "Supplied Merkle proof index {} out of range for {} authorized members",
-            supplied.leaf_index,
-            members.len()
+            supplied.leaf_index, statement.num_members
         )));
     }
     if !supplied.verify() {
@@ -235,11 +226,16 @@ pub fn create_transaction_proof(
         ));
     }
 
-    // Build the compound predicate from the validated member list. Because
-    // the checks above pin root/depth/count to the statement's values, this
-    // embeds the same circuit that verify_transaction_proof recompiles via
-    // range_and_membership_for_verify.
-    let predicate = CompoundPredicate::range_and_membership(lo, hi, members.clone());
+    // Compile from the public (root, depth, num_members) — byte-identical to
+    // what verify_transaction_proof recompiles — and prove over the
+    // crate-internal compiled-circuit path (no unchecked or unsafe API).
+    let compiled = CompoundPredicate::range_and_membership_for_verify(
+        lo,
+        hi,
+        statement.authorized_set_root,
+        statement.merkle_depth,
+        statement.num_members,
+    )?;
 
     // Membership witness comes from the supplied proof (leaf, index bits,
     // siblings); range witness comes from the secret value.
@@ -250,7 +246,7 @@ pub fn create_transaction_proof(
     // Encode public inputs with context binding.
     let public_inputs = encode_public_inputs(statement);
 
-    proof::prove_compound(predicate, &full_witness, &public_inputs, params)
+    proof::prove_compiled(&compiled, &full_witness, &public_inputs, params)
 }
 
 /// Verify a transaction proof against a statement.
@@ -258,19 +254,21 @@ pub fn create_transaction_proof(
 /// Reconstructs the public-inputs encoding from the statement (including the
 /// context hash), independently recompiles the expected
 /// `RangeCheck ∧ SetMembership` circuit from the statement's public fields
-/// (`amount_range`, `authorized_set_root`, `merkle_depth`) and checks that
-/// the proof's circuit hash matches before delegating to
+/// (`amount_range`, `authorized_set_root`, `merkle_depth`, `num_members`)
+/// and checks that the proof's circuit hash matches before delegating to
 /// `proof::verify_unchecked()` (the crate-internal transcript verifier).
 ///
 /// This check is critical: without it a malicious prover can submit a trivial
 /// always-true circuit while claiming the correct `public_inputs`, bypassing
 /// the range and membership constraints entirely.
 ///
-/// The only part of the statement's `members` field used here is its
-/// *length*: since audit finding F-1, the SetMembership circuit constrains
-/// `leaf_index < members.len()` in-circuit, so the verifier must compile
-/// with the true member count. A wrong length changes the expected circuit
-/// hash and fails closed.
+/// Since audit finding F-1, the SetMembership circuit constrains
+/// `leaf_index < num_members` in-circuit, so the statement must carry the
+/// true member count — no member list is needed or accepted. A wrong count
+/// changes the expected circuit hash and fails closed.
+///
+/// Empty sets and inconsistent `(depth, num_members)` pairs are rejected
+/// before recompiling, so malformed statements fail fast.
 pub fn verify_transaction_proof(
     proof: &Proof,
     statement: &TransactionStatement,
@@ -278,18 +276,20 @@ pub fn verify_transaction_proof(
 ) -> Result<bool> {
     let (lo, hi) = statement.amount_range;
 
+    // Fail fast on malformed membership parameters, before recompiling.
+    validate_membership_params(statement.num_members, statement.merkle_depth)?;
+
     // Independently compile the expected circuit from the public statement.
     // The member count is baked into the F-1 index-bound constraint
-    // (`leaf_index < num_members`) of the SetMembership sub-circuit, so the
-    // verifier must supply the true length of the authorized set via
-    // `statement.members`. A wrong count changes the expected circuit hash
-    // and fails closed — it can never loosen the membership constraint.
+    // (`leaf_index < num_members`) of the SetMembership sub-circuit. A wrong
+    // count changes the expected circuit hash and fails closed — it can
+    // never loosen the membership constraint.
     let expected_compiled = CompoundPredicate::range_and_membership_for_verify(
         lo,
         hi,
         statement.authorized_set_root,
         statement.merkle_depth,
-        statement.members.len(),
+        statement.num_members,
     )?;
     let expected_hash = hash_circuit(&expected_compiled.circuit);
 
@@ -327,8 +327,8 @@ mod tests {
             amount_range: (1, 1000),
             authorized_set_root: root,
             merkle_depth: depth,
+            num_members: members.len(),
             context: b"block-42-channel-myorg".to_vec(),
-            members: members.clone(),
         };
 
         // Build witness for secret_value = 500 (leaf_index = 2).
@@ -378,8 +378,8 @@ mod tests {
             amount_range: (1, 1000),
             authorized_set_root: root,
             merkle_depth: depth,
+            num_members: members.len(),
             context: b"block-42".to_vec(),
-            members,
         };
 
         // secret_value = 5000 is outside [1, 1000].
@@ -405,8 +405,8 @@ mod tests {
             amount_range: (1, 1000),
             authorized_set_root: root,
             merkle_depth: depth,
+            num_members: members.len(),
             context: b"block-42".to_vec(),
-            members,
         };
 
         // secret_value = 100 is in range [1, 1000] but NOT in the authorized set.
@@ -521,7 +521,7 @@ mod tests {
     #[test]
     fn test_statement_metadata_mismatch_rejected() {
         let params = ProofParams::fast_insecure();
-        let (statement, witness, members) = setup();
+        let (statement, witness, _members) = setup();
 
         // Wrong depth for a 4-member set.
         let mut bad_depth = statement.clone();
@@ -531,16 +531,20 @@ mod tests {
             "wrong statement depth must be rejected"
         );
 
-        // Member list that no longer matches the pinned root/depth.
-        let mut bad_members = statement.clone();
-        bad_members.members = {
-            let mut m = members.clone();
-            m.push(12345);
-            m
-        };
+        // Empty set.
+        let mut empty = statement.clone();
+        empty.num_members = 0;
         assert!(
-            create_transaction_proof(&bad_members, &witness, &params).is_err(),
-            "member list inconsistent with statement root/depth must be rejected"
+            create_transaction_proof(&empty, &witness, &params).is_err(),
+            "empty authorized set must be rejected"
+        );
+
+        // Count inconsistent with depth (5 members cannot fit in depth 2).
+        let mut bad_count = statement.clone();
+        bad_count.num_members = 5;
+        assert!(
+            create_transaction_proof(&bad_count, &witness, &params).is_err(),
+            "member count inconsistent with depth must be rejected"
         );
     }
 
@@ -555,8 +559,8 @@ mod tests {
             amount_range: (1, 100),
             authorized_set_root: tree.root(),
             merkle_depth: members.len().next_power_of_two().trailing_zeros() as usize,
+            num_members: members.len(),
             context: b"block-9-five-members".to_vec(),
-            members: members.clone(),
         };
         let witness = TransactionWitness {
             secret_value: 55,
@@ -567,6 +571,70 @@ mod tests {
         assert!(verify_transaction_proof(&proof, &statement, &params).unwrap());
     }
 
+    // ── Count-only API: prover and verifier derive identical circuits ──
+
+    #[test]
+    fn test_prover_verifier_circuits_match() {
+        // The prover compiles from (root, depth, num_members) exactly as the
+        // verifier does, so the embedded circuit hash must equal an
+        // independently recompiled expectation — no member list involved.
+        use crate::fiat_shamir::hash_circuit;
+        use crate::predicate::CompoundPredicate;
+
+        let params = ProofParams::fast_insecure();
+        let (statement, witness, _members) = setup();
+        let (lo, hi) = statement.amount_range;
+
+        let proof = create_transaction_proof(&statement, &witness, &params).unwrap();
+        let expected = CompoundPredicate::range_and_membership_for_verify(
+            lo,
+            hi,
+            statement.authorized_set_root,
+            statement.merkle_depth,
+            statement.num_members,
+        )
+        .unwrap();
+        assert_eq!(
+            proof.circuit_hash,
+            hash_circuit(&expected.circuit),
+            "prover and verifier must derive identical circuits from (root, depth, num_members)"
+        );
+    }
+
+    #[test]
+    fn test_verify_rejects_changed_root_depth_count() {
+        // An honest proof must fail verification when any of the public
+        // membership parameters changes: each yields a different expected
+        // circuit (or a rejected compilation), never a looser constraint.
+        let params = ProofParams::fast_insecure();
+        let (statement, witness, _members) = setup();
+        let proof = create_transaction_proof(&statement, &witness, &params).unwrap();
+        assert!(verify_transaction_proof(&proof, &statement, &params).unwrap());
+
+        let mut bad_root = statement.clone();
+        bad_root.authorized_set_root ^= 1;
+        assert!(
+            verify_transaction_proof(&proof, &bad_root, &params).is_err(),
+            "changed root must be rejected"
+        );
+
+        let mut bad_depth = statement.clone();
+        bad_depth.merkle_depth = statement.merkle_depth + 1;
+        assert!(
+            verify_transaction_proof(&proof, &bad_depth, &params).is_err(),
+            "changed depth must be rejected"
+        );
+
+        for bad_count in [statement.num_members - 1, statement.num_members + 1, 0] {
+            let mut bad = statement.clone();
+            bad.num_members = bad_count;
+            assert!(
+                verify_transaction_proof(&proof, &bad, &params).is_err(),
+                "changed member count {bad_count} must be rejected"
+            );
+        }
+    }
+
     // ── F-6 regression: single-member authorized set (depth 0) ────────────
 
     fn single_member_statement() -> TransactionStatement {
@@ -575,9 +643,9 @@ mod tests {
         TransactionStatement {
             amount_range: (0, 100),
             authorized_set_root: tree.root(),
-            merkle_depth: members.len().next_power_of_two().trailing_zeros() as usize, // 0
+            merkle_depth: 0, // single leaf: depth 0
+            num_members: 1,
             context: b"block-7-single-member".to_vec(),
-            members,
         }
     }
 
@@ -589,7 +657,7 @@ mod tests {
 
         let witness = TransactionWitness {
             secret_value: 42,
-            merkle_proof: MerkleTree::build(&statement.members).prove_membership(0),
+            merkle_proof: MerkleTree::build(&[42u32]).prove_membership(0),
         };
 
         let proof = create_transaction_proof(&statement, &witness, &params)
@@ -607,7 +675,7 @@ mod tests {
 
         let witness = TransactionWitness {
             secret_value: 43,
-            merkle_proof: MerkleTree::build(&statement.members).prove_membership(0),
+            merkle_proof: MerkleTree::build(&[42u32]).prove_membership(0),
         };
 
         let result = create_transaction_proof(&statement, &witness, &params);
@@ -636,8 +704,8 @@ mod tests {
             amount_range: (1, 1000),
             authorized_set_root: root,
             merkle_depth: 2,
+            num_members: members.len(),
             context: b"block-42".to_vec(),
-            members,
         };
         let inputs = encode_public_inputs(&statement);
         assert_eq!(inputs.len(), 3 + 8, "context must bind 8 words (256 bits)");
@@ -678,8 +746,8 @@ mod tests {
             amount_range: (1, 1000),
             authorized_set_root: tree.root(),
             merkle_depth: 2,
+            num_members: members.len(),
             context: Vec::new(),
-            members: members.clone(),
         };
         let witness = TransactionWitness {
             secret_value: 500,
