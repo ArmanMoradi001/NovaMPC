@@ -5,8 +5,8 @@
 //!
 //! Current predicates:
 //! - `AdditionCheck`: prove x + y == z  (toy/test predicate)
-//! - `RangeCheck`: prove lo <= x <= hi  (Phase 2)
-//! - `SetMembership`: prove x ∈ {v1, ..., vk}  (Phase 2)
+//! - `RangeCheck`: prove lo <= x <= hi via bit decomposition
+//! - `SetMembership`: prove x ∈ {v1, ..., vk} via a Merkle inclusion proof
 
 use crate::circuit::{bit_decompose_on, Circuit, CircuitBuilder, Gate};
 use crate::merkle::MerkleTree;
@@ -25,9 +25,10 @@ pub enum Predicate {
     XorCheck { expected_xor: u32 },
 
     /// Prove: lo <= witness[0] <= hi (public bounds).
-    /// Implemented as: (witness[0] - lo) <= (hi - lo) using u32 arithmetic.
-    /// NOTE: This is a placeholder; proper range proofs need bit decomposition.
-    /// Phase 2 will implement the full bit-decomposition range proof.
+    /// Implemented via bit decomposition: `(witness[0] - lo) <= (hi - lo)`
+    /// is enforced by decomposing the shifted value and the slack into
+    /// `k = bits_needed(hi - lo)` bits (see `compile_range_check`).
+    /// Requires `hi - lo < 2^31`; wider ranges are rejected at compile time.
     RangeCheck { lo: u32, hi: u32 },
 
     /// Prove: witness[0] is in the set `members` (public list).

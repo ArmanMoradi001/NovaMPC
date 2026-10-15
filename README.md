@@ -17,7 +17,7 @@ without revealing `w`. All computations operate over **Z<sub>2<sup>32</sup></sub
 - **5 predicate types**: addition, multiplication, XOR, range check, and set membership
 - **Compound predicates**: logical AND composition of sub-predicates
 - **Transaction validation API**: high-level interface for blockchain integration
-- **Configurable security**: three parameter sets from fast/insecure to Picnic-style secure
+- **Configurable prototype soundness**: parameter sets from fast/insecure (M=10) up to high-repetition presets (M=219); repetition counts are prototype soundness estimates, not end-to-end security claims (see Soundness Parameters)
 - **No trusted setup**: relies only on symmetric-key primitives (BLAKE3, SHA3, MiMC)
 - **Post-quantum**: security based on symmetric-key assumptions, not number theory
 
@@ -202,21 +202,21 @@ assert!(verify_transaction_proof(&proof, &statement, &mpcith_zk::ProofParams::ba
 |---|---|---|---|
 | `AdditionCheck` | `x, y` | `expected_sum` | 1 Add + 1 AssertEq |
 | `MultiplicationCheck` | `x, y` | `expected_product` | 1 Mul + 1 AssertEq |
-| `XorCheck` | `x, y` | `expected_xor` | 1 Xor + 1 AssertEq |
+| `XorCheck` | `x, y` | `expected_xor` | Bit decomposition + XOR expansion |
 | `RangeCheck` | `x` | `lo, hi` | Bit decomposition + range proof |
-| `SetMembership` | `x` | `members, root` | Merkle proof via MiMC hashes |
+| `SetMembership` | `x` | `root` | Merkle proof via MiMC hashes |
 
 ## Soundness Parameters
 
-| Parameter Set | N (parties) | M (repetitions) | Soundness | Proof Size (Addition) |
+| Parameter Set | N (parties) | M (repetitions) | Prototype Soundness* | Proof Size (Addition, estimator upper bound) |
 |---|---|---|---|---|
-| `fast_insecure()` | 3 | 10 | ≈ 2<sup>-6</sup> | ≈ 3 KB |
-| `low_n()` | 3 | 64 | ≈ 2<sup>-37</sup> | ≈ 18 KB |
-| `balanced()` | 3 | 96 | ≈ 2<sup>-56</sup> | ≈ 60 KB |
-| `secure_100()` / `fabric_recommended()` | 3 | 171 | ≈ 2<sup>-100</sup> | ≈ 107 KB |
-| `secure_128()` | 3 | 219 | ≈ 2<sup>-128</sup> | ≈ 137 KB |
+| `fast_insecure()` | 3 | 10 | ≈ 2<sup>-6</sup> | ≈ 4.5 KB |
+| `low_n()` | 3 | 64 | ≈ 2<sup>-37</sup> | ≈ 27.7 KB |
+| `balanced()` | 3 | 96 | ≈ 2<sup>-56</sup> | ≈ 41.4 KB |
+| `secure_100()` / `fabric_recommended()` | 3 | 171 | ≈ 2<sup>-100</sup> | ≈ 73.7 KB |
+| `secure_128()` | 3 | 219 | ≈ 2<sup>-128</sup> | ≈ 94.3 KB |
 
-Soundness is computed as: `M × log₂(N / (N-1))` bits of security (per-repetition error `(N-1)/N`, i.e. 2/3 at N=3 for the 2-of-3 ZKBoo opening).
+\* Prototype soundness is computed as `M × log₂(N / (N-1))` forgery-estimate bits (per-repetition error `(N-1)/N`, i.e. 2/3 at N=3 for the 2-of-3 ZKBoo opening). These repetition counts do **not** establish end-to-end cryptographic security for the custom protocol or its implementation — see Security Considerations. Proof sizes are `ProofParams::estimated_proof_bytes` upper bounds for `AdditionCheck` (measured proofs land within one residual-share block per repetition below them; e.g. ≈ 4.5 KB measured at `fast_insecure`).
 
 ## Benchmarks
 
@@ -224,11 +224,11 @@ Measured on a standard desktop (Rust release profile with LTO):
 
 ### Single Predicate
 
-| Predicate | Params | Prove | Verify | Proof Size | Soundness |
+| Predicate | Params | Prove | Verify | Proof Size (estimator upper bound) | Soundness |
 |---|---|---|---|---|---|
-| AdditionCheck | fast_insecure | 0.31 ms | 0.20 ms | 2.9 KB | 5.8 bits |
-| AdditionCheck | low_n | 1.95 ms | 1.37 ms | 17.7 KB | 37.4 bits |
-| AdditionCheck | balanced | 6.49 ms | 7.44 ms | 59.9 KB | 56.1 bits |
+| AdditionCheck | fast_insecure | 0.31 ms | 0.20 ms | 4.5 KB | 5.8 bits |
+| AdditionCheck | low_n | 1.95 ms | 1.37 ms | 27.7 KB | 37.4 bits |
+| AdditionCheck | balanced | 6.49 ms | 7.44 ms | 41.4 KB | 56.1 bits |
 
 ### Set Membership (balanced params)
 
@@ -241,10 +241,10 @@ Measured on a standard desktop (Rust release profile with LTO):
 
 ### Compound & Transaction
 
-| Operation | Prove | Verify | Proof Size |
+| Operation | Prove | Verify | Proof Size (estimator upper bound) |
 |---|---|---|---|
-| Compound (RangeCheck ∧ SetMembership) | 14.5 ms | 12.5 ms | 4.5 MB |
-| Transaction Proof | 13.5 ms | 11.1 ms | 3.3 MB |
+| Compound (RangeCheck ∧ SetMembership, 4-member set) | 14.5 ms | 12.5 ms | ≈ 437 KB |
+| Transaction Proof (range ∧ 4-member set) | 13.5 ms | 11.1 ms | ≈ 437 KB |
 
 ## Dependencies
 
@@ -259,6 +259,8 @@ Measured on a standard desktop (Rust release profile with LTO):
 
 ## Security Considerations
 
+- **Prototype, not production cryptography**: repetition counts (`M`) are prototype forgery-estimates under the per-repetition MPCitH model. They do not establish end-to-end cryptographic security for this custom protocol, its Fiat-Shamir binding, or its unaudited implementation. Do not deploy these presets on the strength of their bit labels.
+- **32-bit membership root**: the set-membership Merkle root is a single 32-bit word (≈ 2<sup>16</sup> birthday collision resistance). It must not be relied on for cryptographic strength.
 - **No trusted setup**: all parameters are derived from public constants
 - **Post-quantum**: security relies on symmetric-key primitives, not discrete logarithms or factoring
 - **Circuit-substitution protection**: verification is bound to the intended predicate — the safe APIs (`verify_predicate`, `verify_compound`, `verify_transaction_proof`) independently recompile the expected circuit and fail closed if `proof.circuit_hash` does not match; the unchecked generic verifier is crate-private (`pub(crate)`)
@@ -274,7 +276,7 @@ Measured on a standard desktop (Rust release profile with LTO):
 
 ## Roadmap
 
-- [ ] Full bit-decomposition range proof
+- [x] Full bit-decomposition range proof
 - [ ] Beaver-triple multiplication protocol
 - [ ] Merkle-based set membership refinements
 - [ ] Hyperledger Fabric chaincode integration
