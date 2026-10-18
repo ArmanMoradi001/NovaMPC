@@ -16,6 +16,14 @@ pub struct MerkleProof {
 
 impl MerkleProof {
     /// Recompute the root from leaf + siblings and check it matches `self.root`.
+    ///
+    /// The `leaf_index` must be representable in `siblings.len()` bits: the
+    /// index is consumed one bit per level, and any bits left over after the
+    /// path is folded mean the claimed position lies below the tree the path
+    /// describes. Such proofs are rejected — without this check, the
+    /// authentication path of index `i` would also "verify" for every index
+    /// congruent to `i` modulo `2^depth` (e.g. `i + 2^depth`), since the fold
+    /// only ever looks at the low `depth` bits.
     pub fn verify(&self) -> bool {
         let mut current = self.leaf;
         let mut idx = self.leaf_index;
@@ -27,6 +35,11 @@ impl MerkleProof {
             };
             current = mimc_hash_native(l, r, crate::mimc::MIMC_ROUNDS).0;
             idx /= 2;
+        }
+        // All index bits must have been consumed by the sibling path.
+        // Depth-zero proofs accept only index 0.
+        if idx != 0 {
+            return false;
         }
         current == self.root
     }
@@ -188,6 +201,65 @@ mod tests {
         let mut proof = tree.prove_membership(2);
         proof.leaf = 99;
         assert!(!proof.verify());
+    }
+
+    #[test]
+    fn test_index_bits_beyond_depth_rejected() {
+        // Depth-2 tree (4 leaves). A valid proof for index 1 must not verify
+        // when relabelled as 1 + 2^2 = 5: the low `depth` bits are identical,
+        // so the sided-hash fold alone cannot distinguish them. Only the
+        // leftover-index-bit check can reject it.
+        let tree = MerkleTree::build(&[10, 20, 30, 42]).unwrap();
+        let valid = tree.prove_membership(1);
+        assert!(valid.verify(), "unmodified proof must verify");
+
+        let mut out_of_range = valid.clone();
+        out_of_range.leaf_index += 1 << valid.siblings.len(); // 1 + 4 = 5
+        assert!(
+            !out_of_range.verify(),
+            "index 5 must not verify against the depth-2 path of index 1"
+        );
+
+        // Depth-3 tree (8 leaves): same low 3 bits, index 3 + 8 = 11.
+        let vals: Vec<u32> = (1..=8).collect();
+        let tree8 = MerkleTree::build(&vals).unwrap();
+        let valid8 = tree8.prove_membership(3);
+        assert!(valid8.verify());
+        let mut out_of_range8 = valid8.clone();
+        out_of_range8.leaf_index += 1 << valid8.siblings.len(); // 3 + 8 = 11
+        assert!(
+            !out_of_range8.verify(),
+            "index 11 must not verify against the depth-3 path of index 3"
+        );
+
+        // Multiple extra multiples of 2^depth are rejected too.
+        let mut far_out = valid.clone();
+        far_out.leaf_index = 1 + (1 << 16);
+        assert!(!far_out.verify(), "far out-of-range index must be rejected");
+    }
+
+    #[test]
+    fn test_depth_zero_index_must_be_zero() {
+        // Depth-0 tree: the root IS the single leaf and only index 0 is a
+        // real position. Any nonzero index has unconsumed bits and must be
+        // rejected even though the sibling path is empty.
+        let tree = MerkleTree::build(&[42]).unwrap();
+        let valid = tree.prove_membership(0);
+        assert!(valid.verify());
+
+        let mut tampered = valid.clone();
+        tampered.leaf_index = 1 << 0; // 2^0 = 1
+        assert!(
+            !tampered.verify(),
+            "depth-0 proof with index 1 must be rejected"
+        );
+
+        let mut far = valid.clone();
+        far.leaf_index = 1 << 16;
+        assert!(
+            !far.verify(),
+            "depth-0 proof with large nonzero index must be rejected"
+        );
     }
 
     #[test]
