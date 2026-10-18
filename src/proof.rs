@@ -365,12 +365,25 @@ pub fn prove_compound(
 /// directly with an already-compiled circuit. It is deliberately
 /// `pub(crate)`: external callers must go through the predicate-bound
 /// `prove` / `prove_compound` entry points.
+///
+/// # Parameter validation
+///
+/// `params.validate()` runs first, before hashing, witness evaluation, or
+/// any per-repetition allocation. This matters because
+/// [`crate::mpc::run_mpc_emulation`] `assert!`s exactly 3 parties: without
+/// this check, a direct caller such as
+/// [`crate::tx_validation::create_transaction_proof`] could bypass the
+/// validation performed by `prove` / `prove_compound` and panic inside the
+/// MPC emulation. Every proving path now returns a clean
+/// [`MpcithError::InvalidParams`] before work begins.
 pub(crate) fn prove_compiled(
     compiled: &CompiledPredicate,
     witness: &[u32],
     public_inputs: &[u32],
     params: &ProofParams,
 ) -> Result<Proof> {
+    params.validate()?;
+
     let circuit = &compiled.circuit;
     let circuit_hash = hash_circuit(circuit);
 
@@ -1096,6 +1109,79 @@ mod tests {
         let params = fast_params();
         let pred = Predicate::AdditionCheck { expected_sum: 7 };
         assert!(prove(pred, &[3, 5], &[7], &params).is_err());
+    }
+
+    #[test]
+    fn test_prove_compiled_rejects_invalid_params_never_panics() {
+        // Regression: `create_transaction_proof` calls `prove_compiled`
+        // directly, bypassing the `params.validate()` in `prove` /
+        // `prove_compound`. An unvalidated N != 3 used to reach
+        // `run_mpc_emulation`'s `assert_eq!(num_parties, 3)` and panic.
+        let compiled = Predicate::AdditionCheck { expected_sum: 7 }
+            .compile()
+            .unwrap();
+
+        let bad_params = [
+            ProofParams {
+                num_parties: 0,
+                num_repetitions: 10,
+                field_element_bytes: 4,
+            },
+            ProofParams {
+                num_parties: 1,
+                num_repetitions: 10,
+                field_element_bytes: 4,
+            },
+            ProofParams {
+                num_parties: 2,
+                num_repetitions: 10,
+                field_element_bytes: 4,
+            },
+            ProofParams {
+                num_parties: 4,
+                num_repetitions: 10,
+                field_element_bytes: 4,
+            },
+            ProofParams {
+                num_parties: 3,
+                num_repetitions: 0,
+                field_element_bytes: 4,
+            },
+        ];
+
+        for params in &bad_params {
+            let result = std::panic::catch_unwind(|| {
+                prove_compiled(&compiled, &[3, 4], &[7], params)
+            });
+            match result {
+                Err(_) => panic!(
+                    "prove_compiled panicked for N={} M={}",
+                    params.num_parties, params.num_repetitions
+                ),
+                Ok(Err(MpcithError::InvalidParams(_))) => {}
+                Ok(other) => panic!(
+                    "expected InvalidParams for N={} M={}, got {other:?}",
+                    params.num_parties, params.num_repetitions
+                ),
+            }
+        }
+
+        // Same behavior through the public predicate-bound entry points.
+        for params in &bad_params {
+            let r = std::panic::catch_unwind(|| {
+                prove(
+                    Predicate::AdditionCheck { expected_sum: 7 },
+                    &[3, 4],
+                    &[7],
+                    params,
+                )
+            });
+            match r {
+                Err(_) => panic!("prove panicked on invalid params"),
+                Ok(Err(MpcithError::InvalidParams(_))) => {}
+                Ok(other) => panic!("expected InvalidParams, got {other:?}"),
+            }
+        }
     }
 
     #[test]

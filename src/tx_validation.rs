@@ -167,6 +167,9 @@ fn validate_membership_params(num_members: usize, depth: usize) -> Result<()> {
 /// work starts. All failures return `Err`; this function never panics.
 ///
 /// # Validation
+/// - `params` is a valid `ProofParams` (`num_parties == 3`, at least one
+///   repetition) — checked first, before any Merkle-path check or circuit
+///   compilation.
 /// - `(num_members, merkle_depth)` is a consistent pair: non-empty and
 ///   `num_members <= 2^merkle_depth`.
 /// - `witness.merkle_proof.leaf == witness.secret_value`.
@@ -176,6 +179,7 @@ fn validate_membership_params(num_members: usize, depth: usize) -> Result<()> {
 /// - The supplied proof verifies natively (`MerkleProof::verify`).
 ///
 /// # Errors
+/// - Returns `Err` for invalid proof parameters, before any expensive work.
 /// - Returns `Err` for an empty set or an inconsistent
 ///   `(depth, num_members)` pair.
 /// - Returns `Err` if the supplied Merkle proof is inconsistent with the
@@ -187,6 +191,14 @@ pub fn create_transaction_proof(
     witness: &TransactionWitness,
     params: &ProofParams,
 ) -> Result<Proof> {
+    // Reject invalid proof parameters before any Merkle-path verification or
+    // circuit compilation. `prove_compiled` re-validates internally (it must,
+    // for every crate-internal caller), but validating here keeps malformed
+    // params from paying for the work below. In particular this guarantees
+    // `run_mpc_emulation`'s `num_parties == 3` assertion is never reached
+    // with another value.
+    params.validate()?;
+
     let (lo, hi) = statement.amount_range;
 
     // Fail fast on empty sets and inconsistent (depth, count) pairs,
@@ -546,6 +558,74 @@ mod tests {
             create_transaction_proof(&bad_count, &witness, &params).is_err(),
             "member count inconsistent with depth must be rejected"
         );
+    }
+
+    // ── Invalid proof parameters: clean Err, never a panic ────────────────
+
+    #[test]
+    fn test_invalid_params_return_err_never_panic() {
+        // Regression: `create_transaction_proof` calls `prove_compiled`
+        // directly. Invalid `num_parties` used to reach `run_mpc_emulation`'s
+        // `assert_eq!(num_parties, 3)` and panic; zero repetitions produced a
+        // degenerate proof instead of an error. Both must now fail with
+        // `InvalidParams`, before Merkle checks or circuit compilation.
+        let (statement, witness, _members) = setup();
+
+        let bad_params = [
+            // The ZKBoo 2-of-3 multiplication scheme requires exactly 3.
+            ProofParams {
+                num_parties: 0,
+                num_repetitions: 10,
+                field_element_bytes: 4,
+            },
+            ProofParams {
+                num_parties: 1,
+                num_repetitions: 10,
+                field_element_bytes: 4,
+            },
+            ProofParams {
+                num_parties: 2,
+                num_repetitions: 10,
+                field_element_bytes: 4,
+            },
+            ProofParams {
+                num_parties: 4,
+                num_repetitions: 10,
+                field_element_bytes: 4,
+            },
+            ProofParams {
+                num_parties: usize::MAX,
+                num_repetitions: 10,
+                field_element_bytes: 4,
+            },
+            // At least one repetition is required.
+            ProofParams {
+                num_parties: 3,
+                num_repetitions: 0,
+                field_element_bytes: 4,
+            },
+        ];
+
+        for params in &bad_params {
+            let result = std::panic::catch_unwind(|| {
+                create_transaction_proof(&statement, &witness, params)
+            });
+            match result {
+                Err(_) => panic!(
+                    "create_transaction_proof panicked for N={} M={}",
+                    params.num_parties, params.num_repetitions
+                ),
+                Ok(Err(MpcithError::InvalidParams(_))) => {}
+                Ok(Ok(_)) => panic!(
+                    "create_transaction_proof accepted invalid params N={} M={}",
+                    params.num_parties, params.num_repetitions
+                ),
+                Ok(Err(other)) => panic!(
+                    "expected InvalidParams for N={} M={}, got {other:?}",
+                    params.num_parties, params.num_repetitions
+                ),
+            }
+        }
     }
 
     #[test]
