@@ -131,12 +131,13 @@ fn main() {
         ("balanced     (N=3, M=96)", ProofParams::balanced()),
     ] {
         let soundness_bits = params.soundness_bits();
-        let estimated = params.estimated_proof_bytes(&estimate_circuit, 1);
+        let estimate = match params.estimated_proof_bytes(&estimate_circuit, 1) {
+            Ok(bytes) => format!("{} KB", bytes / 1024),
+            Err(e) => format!("unavailable ({e})"),
+        };
         println!(
-            "  {:30} prototype soundness ≈ 2^{{-{:.1}}}  est. size ≈ {} KB (upper bound)",
-            label,
-            soundness_bits,
-            estimated / 1024
+            "  {:30} prototype soundness ≈ 2^{{-{:.1}}}  est. size ≈ {} (upper bound)",
+            label, soundness_bits, estimate
         );
     }
 

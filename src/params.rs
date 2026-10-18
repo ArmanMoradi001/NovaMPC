@@ -2,6 +2,18 @@ use serde::{Serialize, Deserialize};
 
 use crate::circuit::{Circuit, Gate};
 
+/// Error returned when a proof-size estimate would overflow `usize`.
+fn size_overflow() -> crate::MpcithError {
+    crate::MpcithError::InvalidParams(
+        "proof-size estimate overflows usize for the given circuit and parameters".into(),
+    )
+}
+
+/// Unwrap a `checked_*` arithmetic result, converting overflow into an error
+/// instead of a panic or a silent wrap.
+fn size_ok(value: Option<usize>) -> crate::Result<usize> {
+    value.ok_or_else(size_overflow)
+}
 
 /// Parameters controlling proof size vs soundness trade-off.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,7 +164,23 @@ impl ProofParams {
     ///   the hidden party is not the residual party (~`(N-1)/N` of
     ///   repetitions), so actual proofs measure below this estimate by up
     ///   to one residual block per repetition.
-    pub fn estimated_proof_bytes(&self, circuit: &Circuit, num_public_inputs: usize) -> usize {
+    ///
+    /// # Errors
+    /// Returns [`crate::MpcithError::InvalidParams`] if `self` does not pass
+    /// [`ProofParams::validate`] (e.g. `num_parties != 3` or zero
+    /// repetitions), or if any intermediate term overflows `usize`. All size
+    /// arithmetic is checked: an invalid or extreme estimate fails closed
+    /// instead of panicking or wrapping.
+    pub fn estimated_proof_bytes(
+        &self,
+        circuit: &Circuit,
+        num_public_inputs: usize,
+    ) -> crate::Result<usize> {
+        // Reject invalid parameters before any arithmetic. In particular, an
+        // invalid `num_parties` used to underflow the `num_parties - 2` term
+        // below (panic in debug builds, silent wrap in release).
+        self.validate()?;
+
         let n = self.num_parties;
         let m = self.num_repetitions;
         let tree_depth = n.next_power_of_two().trailing_zeros() as usize;
@@ -163,42 +191,77 @@ impl ProofParams {
         let num_outputs = circuit.num_outputs;
 
         // Exact fixed widths under bincode fixed-int encoding.
-        let gates_bytes: usize = circuit
-            .gates
-            .iter()
-            .map(|gate| match gate {
+        let gates_bytes = circuit.gates.iter().try_fold(0usize, |acc, gate| {
+            let gate_bytes = match gate {
                 Gate::Add { .. } | Gate::Mul { .. } | Gate::Xor { .. } => 4 + 3 * 8,
                 Gate::AddConst { .. } | Gate::MulConst { .. } | Gate::AssertEq { .. } => {
                     4 + 2 * 8 + 4
                 }
-            })
-            .sum();
+            };
+            acc.checked_add(gate_bytes).ok_or_else(size_overflow)
+        })?;
 
         // One opened view: party_idx(8) + mul shares(8 + 4/mul gate) +
         // residual shares(8 + 4/input, residual party only) +
         // randomness(32) + auth path(8 + 32/depth level).
-        let auth_path_bytes = 8 + tree_depth * 32;
-        let plain_view_bytes = 8 + (8 + 4 * num_mul) + 8 + 32 + auth_path_bytes;
-        let residual_view_bytes = plain_view_bytes + 4 * num_inputs;
+        let auth_path_bytes = size_ok(tree_depth.checked_mul(32).and_then(|v| v.checked_add(8)))?;
+        let mul_share_bytes = size_ok(num_mul.checked_mul(4))?;
+        let plain_view_bytes = size_ok(
+            mul_share_bytes
+                .checked_add(auth_path_bytes)
+                .and_then(|v| v.checked_add(8 + 8 + 8 + 32)),
+        )?;
+        let input_share_bytes = size_ok(num_inputs.checked_mul(4))?;
+        let residual_view_bytes = size_ok(plain_view_bytes.checked_add(input_share_bytes))?;
+        // `validate()` guarantees `n == 3`, but keep the subtraction checked
+        // so the estimate stays panic-free if that invariant ever changes.
+        let non_residual_views = size_ok(n.checked_sub(2))?;
         // Upper bound: the residual party is opened in every repetition.
-        let opened_views_bytes = 8 + (n - 2) * plain_view_bytes + residual_view_bytes;
+        let opened_views_bytes = size_ok(
+            non_residual_views
+                .checked_mul(plain_view_bytes)
+                .and_then(|v| v.checked_add(residual_view_bytes))
+                .and_then(|v| v.checked_add(8)),
+        )?;
 
-        let per_rep_bytes = 8 // hidden_party
-            + 32 // commitment_root
-            + (8 + tree_depth * 32) // co_path
-            + opened_views_bytes
-            + (8 + num_outputs * (8 + 4 * n)) // output_shares rows
-            + (8 + num_asserts * (8 + 4 * n)); // assert_shares rows
+        let co_path_bytes = size_ok(tree_depth.checked_mul(32).and_then(|v| v.checked_add(8)))?;
+        let per_party_row_bytes = size_ok(n.checked_mul(4).and_then(|v| v.checked_add(8)))?;
+        let output_rows_bytes = size_ok(
+            num_outputs
+                .checked_mul(per_party_row_bytes)
+                .and_then(|v| v.checked_add(8)),
+        )?;
+        let assert_rows_bytes = size_ok(
+            num_asserts
+                .checked_mul(per_party_row_bytes)
+                .and_then(|v| v.checked_add(8)),
+        )?;
 
-        let fixed_bytes = (8 + 4 * num_public_inputs) // public_inputs
-            + (8 + 4 * num_outputs) // expected_outputs
-            + 8 // repetitions vec prefix
-            + 3 * 8 // ProofParams
-            + (8 + 8 + 8 + 8 + gates_bytes) // Circuit dims + gates
-            + (8 + 32) // circuit_hash (SHA3-256)
-            + 8 + 8; // num_circuit_wires + num_circuit_outputs
+        let per_rep_bytes = size_ok(
+            8usize // hidden_party
+                .checked_add(32) // commitment_root
+                .and_then(|v| v.checked_add(co_path_bytes))
+                .and_then(|v| v.checked_add(opened_views_bytes))
+                .and_then(|v| v.checked_add(output_rows_bytes))
+                .and_then(|v| v.checked_add(assert_rows_bytes)),
+        )?;
 
-        m * per_rep_bytes + fixed_bytes
+        let public_inputs_bytes =
+            size_ok(num_public_inputs.checked_mul(4).and_then(|v| v.checked_add(8)))?;
+        let expected_outputs_bytes =
+            size_ok(num_outputs.checked_mul(4).and_then(|v| v.checked_add(8)))?;
+        let circuit_bytes = size_ok(gates_bytes.checked_add(8 + 8 + 8 + 8))?;
+        let fixed_bytes = size_ok(
+            public_inputs_bytes // public_inputs
+                .checked_add(expected_outputs_bytes) // expected_outputs
+                .and_then(|v| v.checked_add(8)) // repetitions vec prefix
+                .and_then(|v| v.checked_add(3 * 8)) // ProofParams
+                .and_then(|v| v.checked_add(circuit_bytes)) // Circuit dims + gates
+                .and_then(|v| v.checked_add(8 + 32)) // circuit_hash (SHA3-256)
+                .and_then(|v| v.checked_add(8 + 8)), // num_circuit_wires + num_circuit_outputs
+        )?;
+
+        size_ok(m.checked_mul(per_rep_bytes).and_then(|v| v.checked_add(fixed_bytes)))
     }
 
     /// Validate parameters are sensible.
@@ -287,7 +350,9 @@ mod tests {
         num_public_inputs: usize,
         actual: usize,
     ) {
-        let estimate = params.estimated_proof_bytes(circuit, num_public_inputs);
+        let estimate = params
+            .estimated_proof_bytes(circuit, num_public_inputs)
+            .expect("estimate must succeed for valid params and non-overflowing sizes");
         assert!(
             actual <= estimate,
             "estimate must upper-bound actual size: actual={actual} estimate={estimate}"
@@ -350,5 +415,51 @@ mod tests {
         let proof =
             crate::proof::prove_compound(compound, &full, &public_inputs, &params).unwrap();
         check_estimate(&params, &compiled.circuit, public_inputs.len(), proof.serialized_size());
+    }
+
+    #[test]
+    fn test_estimated_proof_bytes_rejects_invalid_params() {
+        // Every invalid party count and zero repetitions must produce a clean
+        // `InvalidParams` error — never a panic (`num_parties - 2` underflow)
+        // and never a bogus estimate.
+        use crate::predicate::Predicate;
+
+        let compiled = Predicate::AdditionCheck { expected_sum: 7 }.compile().unwrap();
+        let base = ProofParams::fast_insecure();
+        let invalid = [
+            ProofParams { num_parties: 0, ..base.clone() },
+            ProofParams { num_parties: 1, ..base.clone() },
+            ProofParams { num_parties: 2, ..base.clone() },
+            ProofParams { num_parties: 4, ..base.clone() },
+            ProofParams { num_repetitions: 0, ..base.clone() },
+        ];
+
+        for params in invalid {
+            match params.estimated_proof_bytes(&compiled.circuit, 1) {
+                Err(crate::MpcithError::InvalidParams(_)) => {}
+                other => panic!(
+                    "params {params:?} must return InvalidParams, got {other:?}"
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn test_estimated_proof_bytes_rejects_overflow() {
+        // `num_repetitions = usize::MAX` passes `validate()` but forces the
+        // final `m * per_rep_bytes` product past `usize::MAX`; the checked
+        // arithmetic must turn that into an error instead of wrapping.
+        use crate::predicate::Predicate;
+
+        let compiled = Predicate::AdditionCheck { expected_sum: 7 }.compile().unwrap();
+        let params = ProofParams {
+            num_parties: 3,
+            num_repetitions: usize::MAX,
+            field_element_bytes: 4,
+        };
+        match params.estimated_proof_bytes(&compiled.circuit, 1) {
+            Err(crate::MpcithError::InvalidParams(_)) => {}
+            other => panic!("overflowing estimate must return InvalidParams, got {other:?}"),
+        }
     }
 }
