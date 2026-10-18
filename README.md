@@ -19,7 +19,7 @@ without revealing `w`. All computations operate over **Z<sub>2<sup>32</sup></sub
 - **Transaction validation API**: high-level interface for blockchain integration
 - **Configurable prototype soundness**: parameter sets from fast/insecure (M=10) up to high-repetition presets (M=219); repetition counts are prototype soundness estimates, not end-to-end security claims (see Soundness Parameters)
 - **No trusted setup**: relies only on symmetric-key primitives (BLAKE3, SHA3, MiMC)
-- **Post-quantum**: security based on symmetric-key assumptions, not number theory
+- **Symmetric-key primitives only**: no number-theoretic hardness assumptions, but this prototype makes no end-to-end post-quantum security claim (see Security Considerations)
 
 ## Architecture
 
@@ -146,7 +146,7 @@ use mpcith_zk::{prove_compound, verify_compound, CompoundPredicate, ProofParams}
 use mpcith_zk::merkle::MerkleTree;
 
 let members = vec![10u32, 20, 42, 100];
-let root = MerkleTree::build(&members).root();
+let root = MerkleTree::build(&members)?.root();
 
 // RangeCheck[0,1000] AND SetMembership(members), sharing one witness value.
 let predicate = CompoundPredicate::range_and_membership(0, 1000, members.clone());
@@ -177,7 +177,7 @@ use mpcith_zk::tx_validation::{
 };
 
 let members = vec![10u32, 20, 42, 100];
-let tree = MerkleTree::build(&members);
+let tree = MerkleTree::build(&members)?;
 // The verifier needs only root, depth, and member count — not the list.
 let statement = TransactionStatement {
     amount_range: (0, 1000),
@@ -262,7 +262,7 @@ Measured on a standard desktop (Rust release profile with LTO):
 - **Prototype, not production cryptography**: repetition counts (`M`) are prototype forgery-estimates under the per-repetition MPCitH model. They do not establish end-to-end cryptographic security for this custom protocol, its Fiat-Shamir binding, or its unaudited implementation. Do not deploy these presets on the strength of their bit labels.
 - **32-bit membership root**: the set-membership Merkle root is a single 32-bit word (≈ 2<sup>16</sup> birthday collision resistance). It must not be relied on for cryptographic strength.
 - **No trusted setup**: all parameters are derived from public constants
-- **Post-quantum**: security relies on symmetric-key primitives, not discrete logarithms or factoring
+- **Symmetric-key building blocks, not a post-quantum security claim**: the protocol uses no number-theoretic assumptions (no discrete log or factoring), so its primitives are not broken by Shor's algorithm — but end-to-end security for this unaudited prototype is *not* established. In particular, the set-membership Merkle root is a single 32-bit word (≈ 2<sup>16</sup> birthday collision resistance), and the repetition-count bit labels are forgery-model estimates only.
 - **Circuit-substitution protection**: verification is bound to the intended predicate — the safe APIs (`verify_predicate`, `verify_compound`, `verify_transaction_proof`) independently recompile the expected circuit and fail closed if `proof.circuit_hash` does not match; the unchecked generic verifier is crate-private (`pub(crate)`)
 - **Fiat-Shamir**: non-interactive transformation via SHA3-256 hash function
 - **Replay protection**: transaction proofs bind to a `context` field (e.g., block hash) hashed into the Fiat-Shamir transcript
