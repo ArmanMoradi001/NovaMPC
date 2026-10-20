@@ -24,6 +24,14 @@ pub struct CommitMerkleProof {
 
 impl CommitMerkleProof {
     /// Recompute the root from leaf + siblings and check it matches `self.root`.
+    ///
+    /// The `leaf_index` must be representable in `siblings.len()` bits: the
+    /// index is consumed one bit per level, and any bits left over after the
+    /// path is folded mean the claimed position lies below the tree the path
+    /// describes. Such proofs are rejected — without this check, the
+    /// authentication path of index `i` would also "verify" for every index
+    /// congruent to `i` modulo `2^depth` (e.g. `i + 2^depth`), since the fold
+    /// only ever looks at the low `depth` bits.
     pub fn verify(&self) -> bool {
         let mut current = self.leaf;
         let mut idx = self.leaf_index;
@@ -35,6 +43,11 @@ impl CommitMerkleProof {
             };
             current = blake3_hash_pair(l, r);
             idx /= 2;
+        }
+        // All index bits must have been consumed by the sibling path.
+        // Depth-zero proofs accept only index 0.
+        if idx != 0 {
+            return false;
         }
         current == self.root
     }
@@ -173,6 +186,95 @@ mod tests {
         for i in 0..8 {
             let proof = tree.prove_membership(i);
             assert!(proof.verify(), "proof for leaf {i} failed");
+        }
+    }
+
+    #[test]
+    fn test_index_bits_beyond_depth_rejected() {
+        // Depth-2 tree (4 leaves). A valid proof for index 1 must not verify
+        // when relabelled as 1 + 2^2 = 5: the low `depth` bits are identical,
+        // so the sided-hash fold alone cannot distinguish them. Only the
+        // leftover-index-bit check can reject it.
+        let leaves = [[10u8; 32], [20u8; 32], [30u8; 32], [42u8; 32]];
+        let tree = CommitTree::build(&leaves);
+        let valid = tree.prove_membership(1);
+        assert!(valid.verify(), "unmodified proof must verify");
+
+        let mut out_of_range = valid.clone();
+        out_of_range.leaf_index += 1 << valid.siblings.len(); // 1 + 4 = 5
+        assert!(
+            !out_of_range.verify(),
+            "index 5 must not verify against the depth-2 path of index 1"
+        );
+
+        // Depth-3 tree (8 leaves): same low 3 bits, index 3 + 8 = 11.
+        let leaves8: Vec<[u8; 32]> = (1u8..=8)
+            .map(|v| [v; 32])
+            .collect();
+        let tree8 = CommitTree::build(&leaves8);
+        let valid8 = tree8.prove_membership(3);
+        assert!(valid8.verify());
+        let mut out_of_range8 = valid8.clone();
+        out_of_range8.leaf_index += 1 << valid8.siblings.len(); // 3 + 8 = 11
+        assert!(
+            !out_of_range8.verify(),
+            "index 11 must not verify against the depth-3 path of index 3"
+        );
+
+        // Multiple extra multiples of 2^depth are rejected too.
+        let mut far_out = valid.clone();
+        far_out.leaf_index = 1 + (1 << 16);
+        assert!(!far_out.verify(), "far out-of-range index must be rejected");
+    }
+
+    #[test]
+    fn test_depth_zero_index_must_be_zero() {
+        // Depth-0 tree: the root IS the single leaf and only index 0 is a
+        // real position. Any nonzero index has unconsumed bits and must be
+        // rejected even though the sibling path is empty.
+        let tree = CommitTree::build(&[[42u8; 32]]);
+        assert_eq!(tree.root(), [42u8; 32]);
+        let valid = tree.prove_membership(0);
+        assert!(valid.verify());
+
+        let mut tampered = valid.clone();
+        tampered.leaf_index = 1 << 0; // 2^0 = 1
+        assert!(
+            !tampered.verify(),
+            "depth-0 proof with index 1 must be rejected"
+        );
+
+        let mut far = valid.clone();
+        far.leaf_index = 1 << 16;
+        assert!(
+            !far.verify(),
+            "depth-0 proof with large nonzero index must be rejected"
+        );
+    }
+
+    /// The leftover-index check must not reject any honestly generated path:
+    /// every leaf index is already < 2^depth and is fully consumed.
+    #[test]
+    fn test_valid_proofs_unaffected_across_depths() {
+        for depth in 0..=5 {
+            let n = 1usize << depth;
+            let leaves: Vec<[u8; 32]> = (0..n)
+                .map(|v| {
+                    let mut buf = [0u8; 32];
+                    buf[..8].copy_from_slice(&(v as u64).to_le_bytes());
+                    buf
+                })
+                .collect();
+            let tree = CommitTree::build(&leaves);
+            for i in 0..n {
+                let proof = tree.prove_membership(i);
+                assert_eq!(proof.siblings.len(), depth);
+                assert_eq!(proof.leaf_index, i);
+                assert!(
+                    proof.verify(),
+                    "honest proof for leaf {i} at depth {depth} must verify"
+                );
+            }
         }
     }
 }
