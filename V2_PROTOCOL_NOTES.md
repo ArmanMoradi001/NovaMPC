@@ -1,4 +1,4 @@
-# NovaMPC v2 protocol notes (STEP-06, updated at STEP-08)
+# NovaMPC v2 protocol notes (STEP-06, updated at STEP-09)
 
 Status: algebraic correctness and implementation notes for the field and proof
 path. These notes are not a security proof. The v2 proof format and verifier are
@@ -152,3 +152,11 @@ heuristic `(2/3)^M` discussion in section 4 remains a gap report, not a theorem.
 Independent review of Poseidon2, BLAKE3 usage, the seed tree, the commitment
 trees, and the Fiat-Shamir conversion is still required before any security or
 deployment claim.
+
+## 8. Benchmarks and migration
+
+STEP-09 measurements are in [`V2_BENCHMARKS.md`](V2_BENCHMARKS.md); the v1-to-v2
+root/proof cutover is in [`V2_MIGRATION.md`](V2_MIGRATION.md). The measurements
+show that v2 proofs are substantially larger than v1 because they carry 32-byte
+field shares. The MPC protocol remains unproven; STEP-10 has not been
+completed, and no benchmark result is a security qualification.
