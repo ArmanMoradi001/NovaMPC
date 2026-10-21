@@ -4,4 +4,5 @@
 //! module reinterprets a v1 proof or a v1 set root.
 
 pub mod field;
+pub mod merkle;
 pub mod poseidon2;
