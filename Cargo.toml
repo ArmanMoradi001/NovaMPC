@@ -16,6 +16,8 @@ name = "demo"
 path = "src/bin/demo.rs"
 
 [dependencies]
+ark-bn254 = "0.6"
+ark-ff = { version = "0.6", default-features = false }
 blake3 = "1.5"
 sha3 = "0.10"
 rand = "0.8"
