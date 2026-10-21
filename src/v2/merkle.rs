@@ -322,24 +322,9 @@ mod tests {
         let tree = MerkleTreeV2::build(&[10, 20, 42]).unwrap();
         let proof = tree.prove_membership(1).unwrap();
 
-        assert!(!verify_membership_statement(
-            tree.root(),
-            4,
-            2,
-            &proof
-        ));
-        assert!(!verify_membership_statement(
-            tree.root(),
-            3,
-            1,
-            &proof
-        ));
-        assert!(!verify_membership_statement(
-            tree.root(),
-            3,
-            3,
-            &proof
-        ));
+        assert!(!verify_membership_statement(tree.root(), 4, 2, &proof));
+        assert!(!verify_membership_statement(tree.root(), 3, 1, &proof));
+        assert!(!verify_membership_statement(tree.root(), 3, 3, &proof));
         assert!(!verify_membership_statement(
             tree.root() + Fr::from(1u64),
             3,

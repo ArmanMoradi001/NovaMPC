@@ -267,11 +267,7 @@ pub enum CircuitErrorV2 {
 
     /// An assertion gate saw a different value.
     #[error("gate {gate}: assertion failed (left={left:?}, right={right:?})")]
-    UnsatisfiedAssertion {
-        gate: usize,
-        left: Fr,
-        right: Fr,
-    },
+    UnsatisfiedAssertion { gate: usize, left: Fr, right: Fr },
 
     /// The circuit declared more wires than its gates define.
     #[error("circuit defines {defined} wires but declares {num_wires}")]
@@ -439,9 +435,7 @@ mod tests {
         let mut builder = CircuitBuilderV2::new(2);
         builder.assert_eq_wire(Wire(0), Wire(1));
         let circuit = builder.build();
-        assert!(circuit
-            .evaluate(&[Fr::from(7u64), Fr::from(7u64)])
-            .is_ok());
+        assert!(circuit.evaluate(&[Fr::from(7u64), Fr::from(7u64)]).is_ok());
         assert!(matches!(
             circuit.evaluate(&[Fr::from(7u64), Fr::from(8u64)]),
             Err(CircuitErrorV2::UnsatisfiedAssertion { .. })
@@ -597,9 +591,7 @@ mod tests {
         assert_eq!(circuit.num_inputs(), 2);
         assert_eq!(circuit.num_wires(), 4);
         assert_eq!(circuit.gates().len(), 2);
-        let values = circuit
-            .evaluate(&[Fr::from(3u64), Fr::from(4u64)])
-            .unwrap();
+        let values = circuit.evaluate(&[Fr::from(3u64), Fr::from(4u64)]).unwrap();
         assert_eq!(values[2], Fr::from(7u64));
         assert_eq!(values[3], Fr::from(21u64));
     }

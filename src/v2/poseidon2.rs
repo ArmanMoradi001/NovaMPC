@@ -31,7 +31,7 @@ pub const TAG_NODE: u64 = 2;
 pub const TAG_ROOT: u64 = 3;
 
 /// Reserved leaf input that cannot be produced by embedding a `u32` member.
-const EMPTY_LEAF_MARKER: u64 = 1u64 << 32;
+pub const EMPTY_LEAF_MARKER: u64 = 1u64 << 32;
 
 /// Parsed, immutable Poseidon2 parameters.
 pub struct Poseidon2Params {
@@ -164,13 +164,17 @@ pub fn hash_node(left: Fr, right: Fr) -> Fr {
     compress(TAG_NODE, left, right)
 }
 
-/// Bind a Merkle root to the number of real members and tree depth.
+/// Pack the root metadata exactly as `(depth << 32) | num_members`.
 ///
-/// `num_members` and `depth` are `u32` values packed as
-/// `(depth << 32) | num_members`, which is unambiguous for this range.
+/// Both inputs are `u32`, so the packed value is unambiguous. Shared by the
+/// native and circuit paths so the framing cannot drift between them.
+pub fn root_metadata(num_members: u32, depth: u32) -> u64 {
+    ((depth as u64) << 32) | (num_members as u64)
+}
+
+/// Bind a Merkle root to the number of real members and tree depth.
 pub fn hash_root(root: Fr, num_members: u32, depth: u32) -> Fr {
-    let metadata = ((depth as u64) << 32) | (num_members as u64);
-    compress(TAG_ROOT, root, Fr::from(metadata))
+    compress(TAG_ROOT, root, Fr::from(root_metadata(num_members, depth)))
 }
 
 /// Canonical 32-byte encoding of a v2 hash output.
@@ -212,7 +216,10 @@ mod tests {
     fn constant_shape_is_pinned() {
         let params = params();
         assert_eq!(params.round_constants.len(), 64);
-        assert_eq!(params.mat_internal_diag_m_1, [Fr::from(1u64), Fr::from(1u64), Fr::from(2u64)]);
+        assert_eq!(
+            params.mat_internal_diag_m_1,
+            [Fr::from(1u64), Fr::from(1u64), Fr::from(2u64)]
+        );
         // First and last upstream RC3 rows are non-zero sentinels that catch a
         // truncated or shifted table.
         assert_eq!(
@@ -228,9 +235,18 @@ mod tests {
     #[test]
     fn permutation_is_deterministic_and_input_sensitive() {
         let a = permutation([Fr::from(1u64), Fr::from(2u64), Fr::from(3u64)]);
-        assert_eq!(a, permutation([Fr::from(1u64), Fr::from(2u64), Fr::from(3u64)]));
-        assert_ne!(a, permutation([Fr::from(1u64), Fr::from(3u64), Fr::from(2u64)]));
-        assert_ne!(a, permutation([Fr::from(2u64), Fr::from(2u64), Fr::from(3u64)]));
+        assert_eq!(
+            a,
+            permutation([Fr::from(1u64), Fr::from(2u64), Fr::from(3u64)])
+        );
+        assert_ne!(
+            a,
+            permutation([Fr::from(1u64), Fr::from(3u64), Fr::from(2u64)])
+        );
+        assert_ne!(
+            a,
+            permutation([Fr::from(2u64), Fr::from(2u64), Fr::from(3u64)])
+        );
     }
 
     #[test]

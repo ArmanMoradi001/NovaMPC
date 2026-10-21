@@ -111,7 +111,10 @@ mod tests {
 
     #[test]
     fn rejects_modulus() {
-        assert_eq!(decode_fr(&MODULUS_BE), Err(FieldEncodingError::NonCanonical));
+        assert_eq!(
+            decode_fr(&MODULUS_BE),
+            Err(FieldEncodingError::NonCanonical)
+        );
     }
 
     #[test]
