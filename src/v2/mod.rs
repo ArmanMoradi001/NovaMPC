@@ -3,6 +3,7 @@
 //! V2 is deliberately separate from the v1 `u32`/MiMC path. Nothing in this
 //! module reinterprets a v1 proof or a v1 set root.
 
+pub mod circuit;
 pub mod field;
 pub mod merkle;
 pub mod poseidon2;
