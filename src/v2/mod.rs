@@ -6,5 +6,7 @@
 pub mod circuit;
 pub mod field;
 pub mod merkle;
+pub mod mpc;
 pub mod poseidon2;
 pub mod poseidon2_circuit;
+pub mod sharing;
