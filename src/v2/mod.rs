@@ -9,4 +9,5 @@ pub mod merkle;
 pub mod mpc;
 pub mod poseidon2;
 pub mod poseidon2_circuit;
+pub mod predicate;
 pub mod sharing;
