@@ -65,6 +65,28 @@ pub struct PartyViewV2 {
     pub residual_input_shares: Vec<Fr>,
 }
 
+/// Canonical, length-prefixed encoding of the non-seed part of a view.
+///
+/// The seed is committed separately by the proof layer. Counts are explicit so
+/// that different vector shapes cannot produce the same byte string.
+pub fn encode_view_payload(
+    mul_output_shares: &[Fr],
+    residual_input_shares: &[Fr],
+) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(
+        16 + 32 * (mul_output_shares.len() + residual_input_shares.len()),
+    );
+    bytes.extend_from_slice(&(mul_output_shares.len() as u64).to_be_bytes());
+    for share in mul_output_shares {
+        bytes.extend_from_slice(&crate::v2::field::encode_fr(share));
+    }
+    bytes.extend_from_slice(&(residual_input_shares.len() as u64).to_be_bytes());
+    for share in residual_input_shares {
+        bytes.extend_from_slice(&crate::v2::field::encode_fr(share));
+    }
+    bytes
+}
+
 impl PartyViewV2 {
     /// Canonical bytes for the committed view, including the seed.
     pub fn to_commitment_bytes_with_seed(&self, seed: &[u8; 32]) -> Vec<u8> {
@@ -84,6 +106,11 @@ impl PartyViewV2 {
     /// Canonical bytes using this view's stored seed.
     pub fn to_commitment_bytes(&self) -> Vec<u8> {
         self.to_commitment_bytes_with_seed(&self.seed)
+    }
+
+    /// Length-prefixed non-seed payload used by the v2 view commitment.
+    pub fn to_commitment_payload(&self) -> Vec<u8> {
+        encode_view_payload(&self.mul_output_shares, &self.residual_input_shares)
     }
 }
 

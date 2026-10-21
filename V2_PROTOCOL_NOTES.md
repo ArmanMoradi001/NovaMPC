@@ -1,7 +1,9 @@
-# NovaMPC v2 protocol notes (STEP-06)
+# NovaMPC v2 protocol notes (STEP-06, updated at STEP-08)
 
-Status: algebraic correctness notes for the field port. These notes are not a
-security proof. The v2 proof format and full verifier do not exist yet.
+Status: algebraic correctness and implementation notes for the field and proof
+path. These notes are not a security proof. The v2 proof format and verifier are
+implemented, but no end-to-end soundness, zero-knowledge, or production-security
+claim is made.
 
 ## 1. What is algebraically checked
 
@@ -41,10 +43,12 @@ No claim is made that v2 is sound, zero-knowledge, 128-bit secure, or
 production-ready. In particular:
 
 - The cut-and-choose/Fiat-Shamir conversion is not proved here.
-- Commitment binding and hiding, seed-tree reconstruction, and view binding are
-  not yet exercised by a v2 proof.
-- The public assertion rows are not yet implemented. The notes below describe
-  the intended construction and its known gap.
+- V2 proof code exercises commitment paths, seed-tree reconstruction, and view
+  binding, but BLAKE3 binding/hiding and the seed-tree PRG are cryptographic
+  assumptions, not theorems established by these tests.
+- The public assertion rows are implemented, but the hidden-party share is not
+  tied to the hidden committed view. That gap remains part of the protocol
+  analysis below.
 - The field change does not remove the need for independent cryptanalytic
   review of Poseidon2, the tagged framing, or the custom MPC protocol.
 
@@ -66,9 +70,11 @@ The earlier `(1/N)^M`-style wording is not a valid end-to-end claim.
 ## 4. Public assertion/output rows
 
 V2 has no unasserted output list. Every public result must be constrained by a
-v2 assertion gate. At the proof layer, assertion rows will publish every party's
-share of the asserted wire before the challenge is derived. The verifier will
-check that the published shares sum to the expected public value.
+v2 assertion gate. The STEP-08 proof layer publishes every party's share of each
+asserted wire before the challenge is derived. The verifier checks that the
+published shares sum to the expected public value and that each opened party's
+published share matches its recomputed wire share. The hidden party's row is
+only checked through the sum.
 
 The hidden party's published assertion share is transcript-bound but is not
 checked against the hidden party's committed view. A malicious prover can make
@@ -92,3 +98,57 @@ that `AssertEq` is a terminal constraint with no output wire, rather than a copy
 gate. Assertion shares are therefore shares of the asserted input wire, not
 shares of a separate copy wire. This change is explicit here and is reflected in
 the v2 proof layer.
+
+## 6. Implemented v2 proof layer (STEP-08)
+
+This section records implementation facts, not security claims.
+
+- **Type and version.** `v2::proof::V2Proof` carries version `2`, its
+  `V2Params` (`N=3`), the `StatementV2`, and one proof repetition per
+  challenge. It is a separate Rust type from the v1 `Proof`. Serialized v2
+  proofs start with the magic `NMPCV2P\0`; v1 bincode proofs do not.
+- **Canonical wire format.** Fields are 32-byte canonical big-endian `Fr`
+  values. Vector lengths and counts are explicit big-endian `u32` values, and
+  SHA/PRG domain lengths use big-endian `u64` values. Decoding rejects a
+  non-canonical field encoding, a wrong magic or version, malformed lengths,
+  truncation, and trailing bytes. The decoder is not `serde`/`bincode`.
+- **Verifier circuit source.** The proof contains no circuit and no
+  `expected_outputs`. `verify` validates the statement, recompiles the canonical
+  circuit with `compile_from_statement`, hashes that circuit, and uses only that
+  circuit. A proof therefore cannot substitute a different gate sequence.
+- **Transcript.** The transcript binds, in order: the protocol identifier,
+  proof/suite version, field identifier, pinned Poseidon2 instance identifier,
+  tagged-framing identifier, `N`, `M`, statement type tag, canonical statement
+  values, canonical circuit hash, every repetition commitment root, and every
+  assertion-share row (including row lengths). Challenges are derived only after
+  all of those values are absorbed. The challenge PRG seed is derived by a
+  domain-separated BLAKE3 call, and the hiding party index is sampled uniformly
+  from `0..N`.
+- **Commitment components.** V2 uses a domain-separated BLAKE3 seed tree,
+  domain-separated BLAKE3 view commitments binding repetition, party, seed,
+  length-prefixed view payload and randomness, and a domain-separated BLAKE3
+  commitment Merkle tree. The member-set root remains the separate tagged
+  Poseidon2 tree from STEP-03. None of these v2 trees reinterpret a v1 tree.
+- **Verifier checks.** For each repetition, verification reconstructs the
+  opened seed-tree leaves from the co-path, recomputes every opened party's wire
+  shares, checks each opened view commitment under the repetition root, checks
+  linear gates and every Mul gate whose right neighbour is opened, checks each
+  opened party's assertion shares against recomputed wire values, and checks
+  every assertion row sum against the public constant. A hidden party's view and
+  assertion share are not opened.
+- **Resource bounds.** `V2Params` rejects `N != 3`, `M == 0`, and
+  `M > 65536`. Decoding caps path depth, Mul/residual/assertion vector lengths,
+  and the total serialized proof at 1 GiB before allocating or verifying. These
+  are denial-of-service bounds, not security parameters. The `balanced()` preset
+  (`M=96`) is only a repetition-count preset and is not a security claim.
+
+## 7. What STEP-08 does not establish
+
+The transcript/commitment binding above is an implementation property, not a
+proof of knowledge soundness or zero knowledge. In particular, the hidden-party
+assertion row, the hidden-party committed view, and the skipped
+hidden-neighbour multiplication share are not checked against one another. The
+heuristic `(2/3)^M` discussion in section 4 remains a gap report, not a theorem.
+Independent review of Poseidon2, BLAKE3 usage, the seed tree, the commitment
+trees, and the Fiat-Shamir conversion is still required before any security or
+deployment claim.

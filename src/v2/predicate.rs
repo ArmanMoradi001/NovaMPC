@@ -77,6 +77,15 @@ pub enum StatementV2 {
 }
 
 impl StatementV2 {
+    /// Stable statement-type tag used by the v2 transcript and proof encoding.
+    pub fn type_tag(&self) -> u8 {
+        match self {
+            Self::Range(_) => 1,
+            Self::Membership(_) => 2,
+            Self::Combined { .. } => 3,
+        }
+    }
+
     pub fn range(&self) -> Option<&RangeStatementV2> {
         match self {
             Self::Range(range) => Some(range),
@@ -472,6 +481,28 @@ pub fn compile_membership(root: Fr, num_members: u32, depth: u32) -> Result<Comp
         statement: StatementV2::Membership(membership),
         layout,
     })
+}
+
+/// Recompile the canonical circuit for a public statement.
+///
+/// This is the verifier's circuit source. A v2 proof never supplies a circuit,
+/// so an attacker cannot substitute a different gate sequence.
+pub fn compile_from_statement(statement: &StatementV2) -> Result<CompiledV2> {
+    match statement {
+        StatementV2::Range(range) => compile_range(range.lo, range.hi),
+        StatementV2::Membership(membership) => compile_membership(
+            membership.root,
+            membership.num_members,
+            membership.depth,
+        ),
+        StatementV2::Combined { range, membership } => compile_combined(
+            range.lo,
+            range.hi,
+            membership.root,
+            membership.num_members,
+            membership.depth,
+        ),
+    }
 }
 
 /// Compile one circuit for `lo <= x <= hi` AND `x` in the committed set.
