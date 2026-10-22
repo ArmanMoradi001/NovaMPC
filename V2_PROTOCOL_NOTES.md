@@ -1,9 +1,11 @@
-# NovaMPC v2 protocol notes (STEP-06, updated at STEP-09)
+# NovaMPC v2 protocol notes (STEP-06, updated at STEP-10)
 
 Status: algebraic correctness and implementation notes for the field and proof
 path. These notes are not a security proof. The v2 proof format and verifier are
-implemented, but no end-to-end soundness, zero-knowledge, or production-security
-claim is made.
+implemented. STEP-10 produced a conditional `(2/3)^M` soundness argument and a
+concrete false-statement forgery that attains the bound; knowledge soundness,
+zero knowledge, and production security remain unproven. See
+[`V2_SECURITY_ANALYSIS.md`](V2_SECURITY_ANALYSIS.md).
 
 ## 1. What is algebraically checked
 
@@ -39,16 +41,19 @@ arithmetic in `Fr`:
 
 ## 2. What is not proven
 
-No claim is made that v2 is sound, zero-knowledge, 128-bit secure, or
+No claim is made that v2 is secure, zero-knowledge, 128-bit secure, or
 production-ready. In particular:
 
-- The cut-and-choose/Fiat-Shamir conversion is not proved here.
+- STEP-10 derives a conditional `2/3`-per-repetition soundness bound and a
+  concrete tight forgery, but the Fiat-Shamir conversion, knowledge soundness,
+  and zero knowledge are not proved.
 - V2 proof code exercises commitment paths, seed-tree reconstruction, and view
   binding, but BLAKE3 binding/hiding and the seed-tree PRG are cryptographic
   assumptions, not theorems established by these tests.
 - The public assertion rows are implemented, but the hidden-party share is not
-  tied to the hidden committed view. That gap remains part of the protocol
-  analysis below.
+  tied to the hidden committed view in a single proof. The multi-transcript
+  argument in `V2_SECURITY_ANALYSIS.md` recovers it across three openings and
+  yields the `2/3` bound; a single-proof extractor is not available.
 - The field change does not remove the need for independent cryptanalytic
   review of Poseidon2, the tagged framing, or the custom MPC protocol.
 
@@ -63,9 +68,20 @@ opened party's check succeeds.
 The skipped check is not recovered by opening the hidden party's share. A
 cheating prover can therefore choose the hidden party's multiplication share
 (and its downstream shares) to make an inconsistent execution look consistent to
-the verifier. The standard 2-of-3 thinking gives a rough per-gate cheating
-probability, but this repository does not prove an end-to-end soundness bound.
-The earlier `(1/N)^M`-style wording is not a valid end-to-end claim.
+the verifier. The exact per-repetition error is not `1/3`: a prover can fail one
+Mul edge and repair the corresponding assertion share so that the proof passes
+when the bad party is hidden or when its right neighbour is hidden. For three
+parties, hidden party `r` and `r+1 (mod 3)` accept, and hidden `r+2` checks the
+bad edge and rejects. The concrete construction and executable evidence are in
+[`V2_SECURITY_ANALYSIS.md`](V2_SECURITY_ANALYSIS.md) and
+[`tests/v2_soundness_gap.rs`](tests/v2_soundness_gap.rs); the derived bound is
+`(2/3)^M`, not `(1/N)^M`.
+
+The earlier `(1/N)^M`-style wording is not a valid end-to-end claim. Under the
+assumptions in the STEP-10 analysis, a false statement has at most two
+acceptable hidden choices per repetition (because all three would extract a
+witness), so the conditional bound is `(2/3)^M`; the concrete attack shows the
+bound is tight.
 
 ## 4. Public assertion/output rows
 
@@ -79,11 +95,16 @@ only checked through the sum.
 The hidden party's published assertion share is transcript-bound but is not
 checked against the hidden party's committed view. A malicious prover can make
 a failing assertion pass by fixing one party's published share; that repaired
-row passes when the repaired party is the hidden party, roughly a `1/3` event
-per row. Combined with the skipped multiplication check, this is the source of
-the heuristic `(2/3)^M` gap. It is not a theorem and must not be advertised as a
-soundness level until STEP-10 supplies a precise argument or the protocol is
-changed.
+row passes when the repaired party is the hidden party, a `1/3` event if
+considered alone. Combined with the skipped multiplication check, the same
+repair passes for two of the three hidden choices: the repaired party is hidden,
+or the repaired party's bad Mul edge is skipped because its right neighbour is
+hidden. This is the source of the `2/3` gap, not a heuristic. STEP-10 derives
+the conditional bound, gives the concrete forgery, and states the remaining
+knowledge-soundness and zero-knowledge gaps in
+[`V2_SECURITY_ANALYSIS.md`](V2_SECURITY_ANALYSIS.md). The `(2/3)^M` number is a
+conditional soundness bound for this opening schedule, not a production
+security level.
 
 V1's `expected_outputs` fallback is deliberately not carried into v2. Any v2
 wire claimed as an output must be forced through an assertion; there is no
@@ -147,16 +168,21 @@ This section records implementation facts, not security claims.
 The transcript/commitment binding above is an implementation property, not a
 proof of knowledge soundness or zero knowledge. In particular, the hidden-party
 assertion row, the hidden-party committed view, and the skipped
-hidden-neighbour multiplication share are not checked against one another. The
-heuristic `(2/3)^M` discussion in section 4 remains a gap report, not a theorem.
-Independent review of Poseidon2, BLAKE3 usage, the seed tree, the commitment
-trees, and the Fiat-Shamir conversion is still required before any security or
-deployment claim.
+hidden-neighbour multiplication share are not checked against one another in a
+single proof. STEP-10's three-opening extraction recovers them across different
+hidden choices and proves the conditional `(2/3)^M` soundness bound, but the
+single-proof extraction/knowledge-soundness and zero-knowledge lemmas remain
+open. Independent review of Poseidon2, BLAKE3 usage, the seed tree, the
+commitment trees, and the Fiat-Shamir conversion is still required before any
+security or deployment claim.
 
 ## 8. Benchmarks and migration
 
 STEP-09 measurements are in [`V2_BENCHMARKS.md`](V2_BENCHMARKS.md); the v1-to-v2
 root/proof cutover is in [`V2_MIGRATION.md`](V2_MIGRATION.md). The measurements
 show that v2 proofs are substantially larger than v1 because they carry 32-byte
-field shares. The MPC protocol remains unproven; STEP-10 has not been
-completed, and no benchmark result is a security qualification.
+field shares. STEP-10's proof/gap report is in
+[`V2_SECURITY_ANALYSIS.md`](V2_SECURITY_ANALYSIS.md): it derives a conditional
+`(2/3)^M` soundness bound, records a concrete false-statement forgery, and
+leaves knowledge soundness and zero knowledge open. No benchmark result is a
+security qualification.

@@ -2,7 +2,10 @@
 
 Status: measurements for the implemented v2 proof path. This is an
 implementation report, not a security proof or a deployment qualification.
-**The MPC protocol remains unproven; STEP-10 has not been completed.** No
+**The MPC protocol is not proven secure.** STEP-10's proof/gap report is in
+[`V2_SECURITY_ANALYSIS.md`](V2_SECURITY_ANALYSIS.md): it derives a conditional
+`(2/3)^M` soundness bound and records a concrete false-statement forgery that
+attains it, while knowledge soundness and zero knowledge remain open. No
 production, 128-bit, or post-quantum security claim is made.
 
 ## 1. Scope
@@ -158,9 +161,16 @@ weaken Poseidon2 framing to make the benchmark look better.
 - The benchmark harness uses the fast timing path; it does not prove
   completeness, soundness, or zero knowledge.
 - `M=96` and `M=219` are repetition-count presets only. They are not security
-  qualifications for this protocol.
-- The known hidden-party assertion/view and hidden-neighbor multiplication gaps
-  remain. See `V2_PROTOCOL_NOTES.md`.
-- STEP-10 is a separate proof/analysis project. Until it is completed and
-  independently reviewed, the MPC protocol must be described as unproven.
+  qualifications for this protocol. The STEP-10 conditional bound is about
+  `2^-56.16` at `M=96` and `2^-128.11` at `M=219` for one transcript attempt
+  under the analysis's ideal-challenge assumptions; the latter is not a clean
+  128-bit claim because of the query loss and the approximately 127-bit generic
+  collision ceiling of BN254 `Fr`.
+- The hidden-party assertion/view and hidden-neighbour multiplication gaps are
+  analysed in `V2_SECURITY_ANALYSIS.md`. They give a tight concrete `2/3`
+  per-repetition forgery, not a `1/3` bound.
+- STEP-10's analysis is complete, but knowledge soundness, zero knowledge, and
+  the concrete cryptographic assumptions remain unproven. The MPC protocol must
+  be described as unproven, and v2 must not be deployed on the strength of these
+  benchmarks.
 - Migration from v1 is discussed in `V2_MIGRATION.md`.

@@ -1,8 +1,9 @@
 # NovaMPC v2 design note (STEP-00)
 
-Status: design freeze for a versioned v2 membership/range path. No v2
-cryptographic code exists yet in this commit. The v1 `u32`/MiMC path remains
-unchanged and is still the only implemented proof format.
+Status: design freeze for a versioned v2 membership/range path. The v2 path is
+implemented through STEP-10; the v1 `u32`/MiMC path remains unchanged. The
+security proof/gap report is in [`V2_SECURITY_ANALYSIS.md`](V2_SECURITY_ANALYSIS.md).
+No v2 deployment or production-security claim is made.
 
 ## 1. Scope and version boundary
 
@@ -181,12 +182,18 @@ or post-quantum secure.
   root to 32 bytes does not by itself repair a 32-bit commitment.
 - Poseidon2 parameter security is an external cryptanalytic assumption. The
   pinned instance and framing need independent review.
-- The custom MPC-in-the-head protocol, its 3-party opening schedule, public
-  assertion/output rows, hidden-neighbor multiplication gap, seed-tree
-  co-path, and Fiat-Shamir conversion remain unproven until STEP-10.
+- STEP-10 analysed the custom MPC-in-the-head protocol, its 3-party opening
+  schedule, public assertion/output rows, hidden-neighbor multiplication gap,
+  seed-tree co-path, and Fiat-Shamir conversion. It derives a conditional
+  `(2/3)^M` soundness bound and records a concrete tight forgery, but
+  knowledge soundness, zero knowledge, and the concrete cryptographic
+  assumptions remain unproven. See `V2_SECURITY_ANALYSIS.md`.
 - A larger hash or more repetitions alone do not establish protocol soundness.
+  At `M=96` the conditional bound is about `2^-56.16`; `M=219` is not a clean
+  128-bit claim.
 - V1 remains a research baseline with a 32-bit MiMC root and must not be
-  described as production-secure.
+  described as production-secure. Neither v1 nor v2 is approved for
+  deployment.
 
 ## 8. Planned implementation gates
 
@@ -195,4 +202,5 @@ The implementation follows `correct.md` in order: canonical field encoding
 (STEP-03), minimal `Fr` circuit (STEP-04), Poseidon2 circuit gadget (STEP-05),
 `Fr` shares/MPC identities (STEP-06), range/membership/combined builders
 (STEP-07), versioned proof/transcript (STEP-08), benchmarks/migration note
-(STEP-09), and the separate security-analysis report (STEP-10).
+(STEP-09), and the separate security-analysis proof/gap report (STEP-10,
+`V2_SECURITY_ANALYSIS.md`).

@@ -1,8 +1,11 @@
 # NovaMPC v1 to v2 migration note
 
 Status: migration guidance for the versioned v2 path. It is not a security or
-production-readiness claim. **The MPC protocol remains unproven; STEP-10 has not
-been completed.**
+production-readiness claim. **The MPC protocol remains unproven.** STEP-10's
+analysis is in [`V2_SECURITY_ANALYSIS.md`](V2_SECURITY_ANALYSIS.md): it derives a
+conditional `(2/3)^M` soundness bound, records a concrete false-statement
+forgery that attains it, and leaves knowledge soundness and zero knowledge
+open. Do not migrate a production system to v2 on the basis of this note.
 
 ## Roots are not upgradeable in place
 
