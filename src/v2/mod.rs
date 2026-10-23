@@ -16,3 +16,4 @@ pub mod proof;
 pub mod seed_tree;
 pub mod sharing;
 pub mod suite;
+pub mod transaction;

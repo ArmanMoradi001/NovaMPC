@@ -168,7 +168,46 @@ assert!(verify_compound(
 )?);
 ```
 
-### Transaction Validation
+### V2 Transaction Validation
+
+The v2 transaction API uses a BN254 `Fr` root and a caller-supplied expected
+statement. The verifier never derives the root from the proof:
+
+```rust
+use mpcith_zk::v2::merkle::MerkleTreeV2;
+use mpcith_zk::v2::suite::V2Params;
+use mpcith_zk::v2::transaction::{
+    create_transaction_proof_v2, verify_transaction_proof_v2, TransactionStatementV2,
+    TransactionWitnessV2,
+};
+
+let members = vec![10u32, 20, 42, 100];
+let tree = MerkleTreeV2::build(&members)?;
+let expected = TransactionStatementV2 {
+    amount_range: (0, 1000),
+    authorized_set_root: tree.root(), // from authenticated ledger/consensus state
+    merkle_depth: tree.depth(),
+    num_members: tree.num_members(),
+    context: b"block-123".to_vec(),
+};
+let witness = TransactionWitnessV2 {
+    secret_value: 42,
+    merkle_proof: tree.prove_membership(2)?,
+};
+let params = V2Params::fast_insecure(); // test-only; use a secure_127 preset for deployment
+let proof = create_transaction_proof_v2(&expected, &witness, &params)?;
+verify_transaction_proof_v2(&proof, &expected, &params)?;
+```
+
+`expected` must be reconstructed from authenticated state, not from the proof
+or an untrusted request. The library checks the relation; it does not
+authenticate the root. See [`V2_SECURITY_ANALYSIS.md`](V2_SECURITY_ANALYSIS.md)
+for the current proof/audit status.
+
+### Transaction Validation (v1 legacy)
+
+> **Legacy:** v1 uses a 32-bit membership root and is not part of the v2 secure
+> transaction path. Use the v2 API above for new work.
 
 ```rust
 use mpcith_zk::merkle::{MerkleTree, MerkleProof};
