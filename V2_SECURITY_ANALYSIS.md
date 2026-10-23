@@ -264,8 +264,10 @@ the review gates close.
 | 128-bit end-to-end security | **NOT CLAIMED** |
 
 The required sign-off table is in
-[`V2_SOUNDNESS_2_3.md`](V2_SOUNDNESS_2_3.md), Section 10. Until a named external
-reviewer signs, the status is `DRAFT / AWAITING REVIEW`.
+[`V2_SOUNDNESS_2_3.md`](V2_SOUNDNESS_2_3.md), Section 10. The audit package and
+reviewer table are in [`V2_AUDIT_PACKAGE.md`](V2_AUDIT_PACKAGE.md). Until a
+named external reviewer signs, the status is `DRAFT / AWAITING REVIEW` and
+`AWAITING AUDIT`.
 
 ## 10. Reproduction
 

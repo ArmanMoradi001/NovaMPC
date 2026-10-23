@@ -11,8 +11,8 @@ readiness. Steps 03 and 05 are review gates; an implementation agent cannot
 sign them off on its own.
 
 The broader implementation analysis is in
-[`V2_SECURITY_ANALYSIS.md`](V2_SECURITY_ANALYSIS.md). The audit package will be
-added as `V2_AUDIT_PACKAGE.md` in Step 05.
+[`V2_SECURITY_ANALYSIS.md`](V2_SECURITY_ANALYSIS.md). The audit package is
+[`V2_AUDIT_PACKAGE.md`](V2_AUDIT_PACKAGE.md).
 
 ---
 
