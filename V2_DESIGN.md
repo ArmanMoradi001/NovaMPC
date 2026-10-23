@@ -158,15 +158,19 @@ public `u32` bounds; they never rely on field wraparound as integer comparison.
 
 ## 6. Transcript and proof versioning
 
-V2 uses a distinct proof version and a fixed transcript identifier including:
+V2 proof format version 3 uses a distinct proof version and a fixed transcript
+identifier including:
 
 - protocol version, field identifier, Poseidon2 instance identifier and
   framing identifier;
 - `N`, `M`;
+- a 32-byte context/session/chain hash;
 - canonical public inputs, set root, member count, depth, range bounds;
 - circuit hash and per-repetition commitment roots;
 - all pre-challenge public share rows.
 
+The public verifier requires the caller's expected statement and context; it
+does not authorize a proof merely because the proof carries its own values.
 Variable-length data gets explicit length prefixes and fixed-width encodings.
 The transcript does not hash platform-dependent `usize` bytes. V2 removes the
 unasserted `expected_outputs` fallback: every v2 output must be constrained by
@@ -182,15 +186,18 @@ or post-quantum secure.
   root to 32 bytes does not by itself repair a 32-bit commitment.
 - Poseidon2 parameter security is an external cryptanalytic assumption. The
   pinned instance and framing need independent review.
-- STEP-10 analysed the custom MPC-in-the-head protocol, its 3-party opening
-  schedule, public assertion/output rows, hidden-neighbor multiplication gap,
-  seed-tree co-path, and Fiat-Shamir conversion. It derives a conditional
-  `(2/3)^M` soundness bound and records a concrete tight forgery, but
-  knowledge soundness, zero knowledge, and the concrete cryptographic
-  assumptions remain unproven. See `V2_SECURITY_ANALYSIS.md`.
+- The security dossier analyses the custom MPC-in-the-head protocol, its
+  3-party opening schedule, public assertion/output rows, hidden-neighbor
+  multiplication gap, seed-tree co-path, and Fiat-Shamir conversion. It derives
+  a conditional `(2/3)^M` soundness bound and records a concrete tight forgery,
+  but knowledge soundness, zero knowledge, and the concrete cryptographic
+  assumptions remain unproven. See `V2_SOUNDNESS_2_3.md` and
+  `V2_SECURITY_ANALYSIS.md`.
 - A larger hash or more repetitions alone do not establish protocol soundness.
-  At `M=96` the conditional bound is about `2^-56.16`; `M=219` is not a clean
-  128-bit claim.
+  The bare minima for the conditional bound are `M=218` at `q=1` and `M=272` at
+  `q=2^32`; the recommended settings add margin at `M=223` and `M=277`. The
+  overall claim is capped at approximately 127 bits by BN254 `Fr`, not 128.
+  `M=96` is a test/benchmark preset, not a secure setting.
 - V1 remains a research baseline with a 32-bit MiMC root and must not be
   described as production-secure. Neither v1 nor v2 is approved for
   deployment.

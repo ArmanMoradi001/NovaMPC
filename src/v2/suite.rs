@@ -35,6 +35,28 @@ pub const V2_NUM_PARTIES: u32 = 3;
 /// proofs from requesting unbounded verification work.
 pub const MAX_V2_REPETITIONS: u32 = 1 << 16;
 
+/// Target overall security level for the v2 hardening work.
+///
+/// This is **not** a 128-bit claim. BN254 `Fr` roots have a generic collision
+/// ceiling of approximately 127 bits, so the proof-soundness repetitions below
+/// cannot raise the end-to-end claim above that ceiling.
+pub const SECURE_127_TARGET_BITS: u32 = 127;
+
+/// Bare minimum repetitions for the conditional `q * (2/3)^M` bound at `q = 1`.
+///
+/// `218 * log2(3/2) ~= 127.52` bits before the ~127-bit BN254 field/hash
+/// ceiling and before implementation/audit losses. This is a minimum, not a
+/// recommended setting; [`V2Params::secure_127`] adds repetition margin.
+pub const SECURE_127_Q1_MIN_REPETITIONS: u32 = 218;
+
+/// Bare minimum repetitions for the conditional `q * (2/3)^M` bound at
+/// `q = 2^32`.
+///
+/// `272 * log2(3/2) - 32 ~= 127.11` bits before the ~127-bit BN254 field/hash
+/// ceiling and before implementation/audit losses. This is a minimum, not a
+/// recommended setting; [`V2Params::secure_127_grinding_2_32`] adds margin.
+pub const SECURE_127_Q32_MIN_REPETITIONS: u32 = 272;
+
 /// Suite identifiers bound by the v2 transcript.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct V2Suite {
@@ -71,10 +93,12 @@ impl V2Params {
         }
     }
 
-    /// Prototype sizing preset matching v1 `balanced()`: N=3, M=96.
+    /// Historical prototype sizing preset matching v1 `balanced()`: N=3, M=96.
     ///
-    /// This is a repetition-count preset only. It is not a security claim for
-    /// the v2 protocol.
+    /// **Not secure.** This is a format/benchmark preset only. At `M=96` the
+    /// conditional 2/3 bound is about 56.16 bits, far below the 127-bit target.
+    /// Use [`Self::secure_127`] or [`Self::secure_127_grinding_2_32`] for a
+    /// deployment-review parameter choice.
     pub fn balanced() -> Self {
         Self::new(V2_NUM_PARTIES, 96)
     }
@@ -82,6 +106,28 @@ impl V2Params {
     /// Fast, explicitly insecure preset for tests and local experiments.
     pub fn fast_insecure() -> Self {
         Self::new(V2_NUM_PARTIES, 4)
+    }
+
+    /// Recommended `q = 1` preset: N=3, M=223.
+    ///
+    /// The conditional `(2/3)^M` proof-soundness estimate is about 130.45 bits,
+    /// leaving roughly three bits of repetition margin above the 218-repetition
+    /// bare minimum. The overall claim remains capped at approximately 127 bits
+    /// by the BN254 `Fr` root/commitment collision ceiling; this preset does not
+    /// create a 128-bit claim.
+    pub fn secure_127() -> Self {
+        Self::new(V2_NUM_PARTIES, 223)
+    }
+
+    /// Recommended grinding-aware preset for `q = 2^32`: N=3, M=277.
+    ///
+    /// The conditional `(2/3)^M` estimate is about 130.03 bits after subtracting
+    /// the 32-bit query loss, leaving roughly three bits of repetition margin
+    /// above the 272-repetition bare minimum. The overall claim remains capped at
+    /// approximately 127 bits by the BN254 `Fr` root/commitment collision
+    /// ceiling.
+    pub fn secure_127_grinding_2_32() -> Self {
+        Self::new(V2_NUM_PARTIES, 277)
     }
 
     /// Validate structural bounds before any proof work.
@@ -116,6 +162,28 @@ mod tests {
         assert!(V2Params::new(3, 1).validate().is_ok());
         assert!(V2Params::balanced().validate().is_ok());
         assert!(V2Params::fast_insecure().validate().is_ok());
+        assert!(V2Params::secure_127().validate().is_ok());
+        assert!(V2Params::secure_127_grinding_2_32().validate().is_ok());
+    }
+
+    #[test]
+    fn secure_127_presets_are_explicit_and_not_the_legacy_96() {
+        assert_eq!(SECURE_127_TARGET_BITS, 127);
+        assert_eq!(SECURE_127_Q1_MIN_REPETITIONS, 218);
+        assert_eq!(SECURE_127_Q32_MIN_REPETITIONS, 272);
+
+        let q1 = V2Params::secure_127();
+        assert_eq!(q1.num_parties, 3);
+        assert_eq!(q1.num_repetitions, 223);
+        assert!(q1.num_repetitions > SECURE_127_Q1_MIN_REPETITIONS);
+
+        let q32 = V2Params::secure_127_grinding_2_32();
+        assert_eq!(q32.num_parties, 3);
+        assert_eq!(q32.num_repetitions, 277);
+        assert!(q32.num_repetitions > SECURE_127_Q32_MIN_REPETITIONS);
+
+        assert_eq!(V2Params::balanced().num_repetitions, 96);
+        assert_eq!(V2Params::fast_insecure().num_repetitions, 4);
     }
 
     #[test]

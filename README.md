@@ -194,7 +194,7 @@ let witness = TransactionWitnessV2 {
     secret_value: 42,
     merkle_proof: tree.prove_membership(2)?,
 };
-let params = V2Params::fast_insecure(); // test-only; use a secure_127 preset for deployment
+let params = V2Params::secure_127(); // M=223, q=1; or secure_127_grinding_2_32()
 let proof = create_transaction_proof_v2(&expected, &witness, &params)?;
 verify_transaction_proof_v2(&proof, &expected, &params)?;
 ```
@@ -247,13 +247,34 @@ assert!(verify_transaction_proof(&proof, &statement, &mpcith_zk::ProofParams::ba
 
 ## Soundness Parameters
 
+### V2 parameters (current path)
+
+| Preset | N | M | Conditional bits* | Role |
+|---|---:|---:|---:|---|
+| `fast_insecure()` | 3 | 4 | 2.34 | Tests/format only; not secure |
+| `balanced()` | 3 | 96 | 56.16 | Historical benchmark only; not secure |
+| `secure_127()` | 3 | 223 | 130.45 at `q=1` | Recommended with margin; overall cap ~127 bits |
+| `secure_127_grinding_2_32()` | 3 | 277 | 130.03 at `q=2^32` | Recommended with margin; overall cap ~127 bits |
+
+\* Conditional `(2/3)^M` proof-soundness estimate, before the ~127-bit BN254
+`Fr`/BLAKE3 collision ceiling and before audit or implementation losses. The
+whole claim is **not 128-bit**. Bare minima are `M=218` at `q=1` and `M=272` at
+`q=2^32`; `M=223`/`277` add roughly three bits of repetition margin. See
+[`V2_SOUNDNESS_2_3.md`](V2_SOUNDNESS_2_3.md).
+
+### V1 legacy prototype parameters
+
+> **Legacy:** these are v1 presets. v1 uses a 32-bit MiMC root and is not part of
+> the v2 secure transaction path. The API name `secure_128()` is historical; it
+> is not an end-to-end 128-bit claim.
+
 | Parameter Set | N (parties) | M (repetitions) | Prototype Soundness* | Proof Size (Addition, estimator upper bound) |
 |---|---|---|---|---|
 | `fast_insecure()` | 3 | 10 | ≈ 2<sup>-6</sup> | ≈ 4.5 KB |
 | `low_n()` | 3 | 64 | ≈ 2<sup>-37</sup> | ≈ 27.7 KB |
 | `balanced()` | 3 | 96 | ≈ 2<sup>-56</sup> | ≈ 41.4 KB |
 | `secure_100()` / `fabric_recommended()` | 3 | 171 | ≈ 2<sup>-100</sup> | ≈ 73.7 KB |
-| `secure_128()` | 3 | 219 | ≈ 2<sup>-128</sup> | ≈ 94.3 KB |
+| `secure_128()` (historical name) | 3 | 219 | ≈ 2<sup>-128</sup> | ≈ 94.3 KB |
 
 \* Prototype soundness is computed as `M × log₂(N / (N-1))` forgery-estimate bits (per-repetition error `(N-1)/N`, i.e. 2/3 at N=3 for the 2-of-3 ZKBoo opening). These repetition counts do **not** establish end-to-end cryptographic security for the custom protocol or its implementation — see Security Considerations. Proof sizes are `ProofParams::estimated_proof_bytes` upper bounds for `AdditionCheck` (measured proofs land within one residual-share block per repetition below them; e.g. ≈ 4.5 KB measured at `fast_insecure`).
 

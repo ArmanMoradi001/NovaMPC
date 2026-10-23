@@ -4,6 +4,11 @@
 //! must reconstruct [`TransactionStatementV2`] from authenticated ledger or
 //! consensus state and pass it to [`verify_transaction_proof_v2`]. A proof is
 //! never allowed to supply the expected root, bounds, count, depth, or context.
+//!
+//! For deployment review, use [`V2Params::secure_127`] (`M = 223`, `q = 1`) or
+//! [`V2Params::secure_127_grinding_2_32`] (`M = 277`, `q = 2^32`). The overall
+//! claim remains capped at approximately 127 bits by the BN254 `Fr` root;
+//! `balanced` and `fast_insecure` are test/benchmark presets only.
 
 use ark_bn254::Fr;
 

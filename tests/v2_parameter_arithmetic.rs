@@ -4,6 +4,10 @@
 //! `V2_SOUNDNESS_2_3.md`. This test does not establish a security proof; it
 //! only prevents the documented arithmetic from drifting away from the code.
 
+use mpcith_zk::v2::suite::{
+    SECURE_127_Q1_MIN_REPETITIONS, SECURE_127_Q32_MIN_REPETITIONS, SECURE_127_TARGET_BITS,
+};
+
 const LOG2_3_OVER_2: f64 = 0.584_962_500_721_156_2;
 
 fn soundness_bits(m: u32, q_log2: u32) -> f64 {
@@ -19,6 +23,10 @@ fn assert_close(actual: f64, expected: f64) {
 
 #[test]
 fn parameter_table_matches_the_documented_2_3_bound() {
+    assert_eq!(SECURE_127_TARGET_BITS, 127);
+    assert_eq!(SECURE_127_Q1_MIN_REPETITIONS, 218);
+    assert_eq!(SECURE_127_Q32_MIN_REPETITIONS, 272);
+
     for (m, q_log2) in [
         (96, 0),
         (96, 20),
@@ -34,19 +42,19 @@ fn parameter_table_matches_the_documented_2_3_bound() {
         );
     }
 
-    assert_close(soundness_bits(218, 0), 127.5218);
+    assert_close(soundness_bits(SECURE_127_Q1_MIN_REPETITIONS, 0), 127.5218);
     assert_close(soundness_bits(223, 0), 130.4466);
-    assert_close(soundness_bits(272, 32), 127.1098);
+    assert_close(soundness_bits(SECURE_127_Q32_MIN_REPETITIONS, 32), 127.1098);
     assert_close(soundness_bits(277, 32), 130.0346);
     assert_close(soundness_bits(96, 0), 56.1564);
 
     // Bare minima clear 127 bits at the stated query budgets, without margin.
-    assert!(soundness_bits(218, 0) >= 127.0);
-    assert!(soundness_bits(272, 32) >= 127.0);
+    assert!(soundness_bits(SECURE_127_Q1_MIN_REPETITIONS, 0) >= 127.0);
+    assert!(soundness_bits(SECURE_127_Q32_MIN_REPETITIONS, 32) >= 127.0);
 
     // Recommended settings add roughly three bits of margin.
-    assert!(soundness_bits(223, 0) > soundness_bits(218, 0) + 2.0);
-    assert!(soundness_bits(277, 32) > soundness_bits(272, 32) + 2.0);
+    assert!(soundness_bits(223, 0) > soundness_bits(SECURE_127_Q1_MIN_REPETITIONS, 0) + 2.0);
+    assert!(soundness_bits(277, 32) > soundness_bits(SECURE_127_Q32_MIN_REPETITIONS, 32) + 2.0);
 
     // The old balanced preset is not a secure setting.
     assert!(soundness_bits(96, 0) < 57.0);
