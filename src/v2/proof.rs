@@ -41,6 +41,19 @@ pub const V2_PROOF_MAGIC: [u8; 8] = *b"NMPCV2P\0";
 const CIRCUIT_HASH_CONTEXT: &str = "NovaMPC-v2/circuit-hash/v1";
 const TRANSCRIPT_CONTEXT: &str = "NovaMPC-v2/transcript/v1";
 const CHALLENGE_CONTEXT: &str = "NovaMPC-v2/challenge-rng/v1";
+const CONTEXT_HASH_CONTEXT: &str = "NovaMPC-v2/context/v1";
+
+/// Hash an arbitrary context/session/chain domain into the fixed-width value
+/// bound by a v2 proof and transcript.
+///
+/// The length prefix keeps concatenations unambiguous. The proof stores only
+/// this 32-byte hash, never the raw context bytes.
+pub fn hash_context_v2(context: &[u8]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key(CONTEXT_HASH_CONTEXT);
+    hasher.update(&(context.len() as u64).to_be_bytes());
+    hasher.update(context);
+    *hasher.finalize().as_bytes()
+}
 
 const MAX_V2_MUL_SHARES: usize = 1 << 20;
 const MAX_V2_RESIDUAL_SHARES: usize = 1 << 20;
@@ -82,6 +95,8 @@ pub struct V2Proof {
     pub version: u16,
     pub params: V2Params,
     pub statement: StatementV2,
+    /// Domain-separated hash of the caller's context/session/chain binding.
+    pub context: [u8; 32],
     pub repetitions: Vec<RepetitionProofV2>,
 }
 
@@ -95,6 +110,7 @@ impl V2Proof {
         out.extend_from_slice(&self.params.num_parties.to_be_bytes());
         out.extend_from_slice(&self.params.num_repetitions.to_be_bytes());
         encode_statement(&mut out, &self.statement);
+        out.extend_from_slice(&self.context);
 
         let rep_count = u32_len(self.repetitions.len(), "v2 repetitions")?;
         out.extend_from_slice(&rep_count.to_be_bytes());
@@ -180,6 +196,7 @@ impl V2Proof {
         let tree_depth = tree_depth(params.num_parties);
 
         let statement = decode_statement(&mut reader)?;
+        let context = reader.hash32()?;
 
         let rep_count = reader.len(
             "repetitions",
@@ -304,6 +321,7 @@ impl V2Proof {
             version,
             params,
             statement,
+            context,
             repetitions,
         })
     }
@@ -553,6 +571,7 @@ struct TranscriptRepV2<'a> {
 
 fn transcript_hash(
     statement: &StatementV2,
+    context: &[u8; 32],
     params: &V2Params,
     circuit_hash: &[u8; 32],
     reps: &[TranscriptRepV2<'_>],
@@ -566,6 +585,7 @@ fn transcript_hash(
     absorb(&mut hasher, b"framing", suite.framing_id);
     absorb_u32(&mut hasher, b"num-parties", params.num_parties);
     absorb_u32(&mut hasher, b"num-repetitions", params.num_repetitions);
+    absorb(&mut hasher, b"context", context);
     absorb_u8(&mut hasher, b"statement-type", statement.type_tag());
     let public_values = statement.public_values();
     absorb_u32(
@@ -757,8 +777,14 @@ struct RepDataV2 {
 /// Prove a precompiled v2 statement.
 ///
 /// The circuit is recompiled from the statement and compared with `compiled`,
-/// so the proof always follows the verifier's canonical circuit.
-pub fn prove(compiled: &CompiledV2, witness: &[Fr], params: &V2Params) -> Result<V2Proof> {
+/// so the proof always follows the verifier's canonical circuit. `context` is
+/// the 32-byte output of [`hash_context_v2`] and is bound into the transcript.
+pub fn prove(
+    compiled: &CompiledV2,
+    witness: &[Fr],
+    context: [u8; 32],
+    params: &V2Params,
+) -> Result<V2Proof> {
     params.validate()?;
     let canonical = compile_from_statement(compiled.statement())?;
     if canonical.circuit() != compiled.circuit() {
@@ -836,6 +862,7 @@ pub fn prove(compiled: &CompiledV2, witness: &[Fr], params: &V2Params) -> Result
         .collect();
     let transcript = transcript_hash(
         canonical.statement(),
+        &context,
         params,
         &circuit_hash,
         &transcript_reps,
@@ -875,6 +902,7 @@ pub fn prove(compiled: &CompiledV2, witness: &[Fr], params: &V2Params) -> Result
         version: V2_PROOF_VERSION,
         params: params.clone(),
         statement: canonical.statement().clone(),
+        context,
         repetitions: repetition_proofs,
     })
 }
@@ -887,17 +915,24 @@ pub fn prove(compiled: &CompiledV2, witness: &[Fr], params: &V2Params) -> Result
 pub fn prove_statement(
     statement: &StatementV2,
     witness: &[Fr],
+    context: [u8; 32],
     params: &V2Params,
 ) -> Result<V2Proof> {
     let compiled = compile_from_statement(statement)?;
-    prove(&compiled, witness, params)
+    prove(&compiled, witness, context, params)
 }
 
 /// Convenience wrapper for a range-only proof.
-pub fn prove_range(lo: u32, hi: u32, value: u32, params: &V2Params) -> Result<V2Proof> {
+pub fn prove_range(
+    lo: u32,
+    hi: u32,
+    value: u32,
+    context: [u8; 32],
+    params: &V2Params,
+) -> Result<V2Proof> {
     let compiled = compile_range(lo, hi)?;
     let witness = compiled.witness_for(value, None)?;
-    prove(&compiled, &witness, params)
+    prove(&compiled, &witness, context, params)
 }
 
 /// Convenience wrapper for a membership-only proof.
@@ -907,14 +942,16 @@ pub fn prove_membership(
     depth: u32,
     value: u32,
     membership_proof: &MerkleProofV2,
+    context: [u8; 32],
     params: &V2Params,
 ) -> Result<V2Proof> {
     let compiled = compile_membership(root, num_members, depth)?;
     let witness = compiled.witness_for(value, Some(membership_proof))?;
-    prove(&compiled, &witness, params)
+    prove(&compiled, &witness, context, params)
 }
 
 /// Convenience wrapper for a combined range-and-membership proof.
+#[allow(clippy::too_many_arguments)]
 pub fn prove_combined(
     lo: u32,
     hi: u32,
@@ -923,20 +960,22 @@ pub fn prove_combined(
     depth: u32,
     value: u32,
     membership_proof: &MerkleProofV2,
+    context: [u8; 32],
     params: &V2Params,
 ) -> Result<V2Proof> {
     let compiled = compile_combined(lo, hi, root, num_members, depth)?;
     let witness = compiled.witness_for(value, Some(membership_proof))?;
-    prove(&compiled, &witness, params)
+    prove(&compiled, &witness, context, params)
 }
 
 // ─── Verification ────────────────────────────────────────────────────────────
 
-/// Verify a v2 proof against the statement embedded in it.
+/// Verify a v2 proof against the statement and context embedded in it.
 ///
-/// Applications that require a specific statement must use
-/// [`verify_statement`] or compare `proof.statement` themselves.
-pub fn verify(proof: &V2Proof, params: &V2Params) -> Result<()> {
+/// This is an internal primitive. External callers must use
+/// [`verify_statement`] or [`verify_bytes_statement`] so the expected statement
+/// and context are pinned by the caller.
+pub(crate) fn verify(proof: &V2Proof, params: &V2Params) -> Result<()> {
     params.validate()?;
     if proof.version != V2_PROOF_VERSION {
         return Err(MpcithError::VerificationFailed(format!(
@@ -965,6 +1004,7 @@ pub fn verify(proof: &V2Proof, params: &V2Params) -> Result<()> {
         .collect();
     let transcript = transcript_hash(
         &proof.statement,
+        &proof.context,
         params,
         &circuit_hash,
         &transcript_reps,
@@ -1074,16 +1114,16 @@ pub fn verify(proof: &V2Proof, params: &V2Params) -> Result<()> {
     Ok(())
 }
 
-/// Decode and verify a canonical serialized v2 proof.
-pub fn verify_bytes(bytes: &[u8], params: &V2Params) -> Result<()> {
-    let proof = V2Proof::from_bytes(bytes)?;
-    verify(&proof, params)
-}
-
-/// Verify a proof and require it to be for the caller's expected statement.
+/// Verify a proof and require both the caller's expected statement and the
+/// caller's expected context hash.
+///
+/// This is the only public verifier for an authorization decision. The caller
+/// must construct `expected_statement` from authenticated state and pass the
+/// context hash produced by [`hash_context_v2`].
 pub fn verify_statement(
     proof: &V2Proof,
     expected_statement: &StatementV2,
+    expected_context: [u8; 32],
     params: &V2Params,
 ) -> Result<()> {
     if proof.statement != *expected_statement {
@@ -1091,7 +1131,24 @@ pub fn verify_statement(
             "v2 proof statement does not match expected statement".into(),
         ));
     }
+    if proof.context != expected_context {
+        return Err(MpcithError::VerificationFailed(
+            "v2 proof context does not match expected context".into(),
+        ));
+    }
     verify(proof, params)
+}
+
+/// Decode a canonical serialized v2 proof and require the caller's expected
+/// statement and context hash.
+pub fn verify_bytes_statement(
+    bytes: &[u8],
+    expected_statement: &StatementV2,
+    expected_context: [u8; 32],
+    params: &V2Params,
+) -> Result<()> {
+    let proof = V2Proof::from_bytes(bytes)?;
+    verify_statement(&proof, expected_statement, expected_context, params)
 }
 
 #[cfg(test)]
@@ -1103,8 +1160,12 @@ mod tests {
         V2Params::new(3, 4)
     }
 
+    fn context() -> [u8; 32] {
+        hash_context_v2(b"v2-proof-tests")
+    }
+
     fn range_proof() -> V2Proof {
-        prove_range(10, 100, 42, &params()).unwrap()
+        prove_range(10, 100, 42, context(), &params()).unwrap()
     }
 
     fn membership_fixture() -> (MerkleTreeV2, V2Proof) {
@@ -1116,6 +1177,7 @@ mod tests {
             tree.depth(),
             20,
             &member_proof,
+            context(),
             &params(),
         )
         .unwrap();
@@ -1133,12 +1195,13 @@ mod tests {
             tree.depth(),
             20,
             &member_proof,
+            context(),
             &params(),
         )
         .unwrap()
     }
 
-    fn transcript_for(proof: &V2Proof, suite: &V2Suite) -> [u8; 32] {
+    fn transcript_for(proof: &V2Proof, context: [u8; 32], suite: &V2Suite) -> [u8; 32] {
         let compiled = compile_from_statement(&proof.statement).unwrap();
         let hash = hash_circuit_v2(compiled.circuit());
         let reps: Vec<TranscriptRepV2<'_>> = proof
@@ -1149,16 +1212,24 @@ mod tests {
                 assert_shares: &rep.assert_shares,
             })
             .collect();
-        transcript_hash(&proof.statement, &proof.params, &hash, &reps, suite)
+        transcript_hash(
+            &proof.statement,
+            &context,
+            &proof.params,
+            &hash,
+            &reps,
+            suite,
+        )
     }
 
     #[test]
     fn range_membership_and_combined_round_trip() {
         let p = range_proof();
         verify(&p, &params()).unwrap();
-        verify_statement(&p, &p.statement, &params()).unwrap();
+        verify_statement(&p, &p.statement, context(), &params()).unwrap();
         assert_eq!(p.version, V2_PROOF_VERSION);
         assert_eq!(p.params, params());
+        assert_eq!(p.context, context());
 
         let (_tree, p) = membership_fixture();
         verify(&p, &params()).unwrap();
@@ -1168,10 +1239,17 @@ mod tests {
     }
 
     #[test]
-    fn wrong_statement_is_rejected() {
+    fn wrong_statement_or_context_is_rejected() {
         let proof = range_proof();
         let wrong = StatementV2::Range(RangeStatementV2 { lo: 10, hi: 99 });
-        assert!(verify_statement(&proof, &wrong, &params()).is_err());
+        assert!(verify_statement(&proof, &wrong, context(), &params()).is_err());
+        assert!(verify_statement(
+            &proof,
+            &proof.statement,
+            hash_context_v2(b"wrong-context"),
+            &params()
+        )
+        .is_err());
 
         let mut tampered = proof.clone();
         tampered.statement = wrong;
@@ -1282,7 +1360,16 @@ mod tests {
         assert_eq!(proof.serialized_size().unwrap(), bytes.len());
         let decoded = V2Proof::from_bytes(&bytes).unwrap();
         assert_eq!(decoded, proof);
-        verify_bytes(&bytes, &params()).unwrap();
+        assert_eq!(decoded.context, context());
+        verify(&decoded, &params()).unwrap();
+        verify_bytes_statement(&bytes, &proof.statement, context(), &params()).unwrap();
+        assert!(verify_bytes_statement(
+            &bytes,
+            &proof.statement,
+            hash_context_v2(b"wrong-context"),
+            &params()
+        )
+        .is_err());
 
         for proof in [membership_fixture().1, combined_proof()] {
             let bytes = proof.to_bytes().unwrap();
@@ -1300,14 +1387,25 @@ mod tests {
         noncanonical[offset..offset + 32].copy_from_slice(&modulus_bytes());
         assert!(V2Proof::from_bytes(&noncanonical).is_err());
 
+        let mut unbound = proof.clone();
+        unbound.context = hash_context_v2(b"other-context");
+        assert!(verify(&unbound, &params()).is_err());
+        assert!(verify_statement(&unbound, &proof.statement, context(), &params()).is_err());
+
         let mut bad = bytes.clone();
         bad[0] ^= 1;
         assert!(V2Proof::from_bytes(&bad).is_err());
-        assert!(verify_bytes(&bad, &params()).is_err());
+        assert!(verify_bytes_statement(&bad, &proof.statement, context(), &params()).is_err());
 
         let mut bad = bytes.clone();
         bad[8] ^= 1;
         assert!(V2Proof::from_bytes(&bad).is_err());
+
+        let mut old = proof.clone();
+        old.version = 2;
+        let old_bytes = old.to_bytes().unwrap();
+        assert!(V2Proof::from_bytes(&old_bytes).is_err());
+        assert!(verify(&old, &params()).is_err());
 
         let mut bad = bytes.clone();
         bad.pop();
@@ -1343,12 +1441,20 @@ mod tests {
     }
 
     #[test]
-    fn transcript_binds_suite_statement_circuit_and_public_rows() {
+    fn context_hash_is_deterministic_and_length_prefixed() {
+        assert_eq!(hash_context_v2(b"context"), hash_context_v2(b"context"));
+        assert_ne!(hash_context_v2(b"a"), hash_context_v2(b"ab"));
+        assert_ne!(hash_context_v2(b"ab"), hash_context_v2(b"a"));
+        assert_ne!(hash_context_v2(b""), hash_context_v2(b"\0"));
+    }
+
+    #[test]
+    fn transcript_binds_suite_statement_context_circuit_and_public_rows() {
         let proof = range_proof();
-        let base = transcript_for(&proof, &V2_SUITE);
+        let base = transcript_for(&proof, context(), &V2_SUITE);
 
         let wrong_version = V2Suite {
-            version: 3,
+            version: V2_PROOF_VERSION.wrapping_add(1),
             ..V2_SUITE
         };
         let wrong_field = V2Suite {
@@ -1367,25 +1473,29 @@ mod tests {
             protocol_id: &b"wrong-protocol"[..],
             ..V2_SUITE
         };
-        assert_ne!(base, transcript_for(&proof, &wrong_version));
-        assert_ne!(base, transcript_for(&proof, &wrong_field));
-        assert_ne!(base, transcript_for(&proof, &wrong_poseidon));
-        assert_ne!(base, transcript_for(&proof, &wrong_framing));
-        assert_ne!(base, transcript_for(&proof, &wrong_protocol));
+        assert_ne!(base, transcript_for(&proof, context(), &wrong_version));
+        assert_ne!(base, transcript_for(&proof, context(), &wrong_field));
+        assert_ne!(base, transcript_for(&proof, context(), &wrong_poseidon));
+        assert_ne!(base, transcript_for(&proof, context(), &wrong_framing));
+        assert_ne!(base, transcript_for(&proof, context(), &wrong_protocol));
+        assert_ne!(
+            base,
+            transcript_for(&proof, hash_context_v2(b"different-context"), &V2_SUITE)
+        );
 
         let mut changed = proof.clone();
         if let StatementV2::Range(range) = &mut changed.statement {
             range.hi = 99;
         }
-        assert_ne!(base, transcript_for(&changed, &V2_SUITE));
+        assert_ne!(base, transcript_for(&changed, context(), &V2_SUITE));
 
         changed = proof.clone();
         changed.params.num_repetitions += 1;
-        assert_ne!(base, transcript_for(&changed, &V2_SUITE));
+        assert_ne!(base, transcript_for(&changed, context(), &V2_SUITE));
 
         changed = proof.clone();
         changed.params.num_parties = 4;
-        assert_ne!(base, transcript_for(&changed, &V2_SUITE));
+        assert_ne!(base, transcript_for(&changed, context(), &V2_SUITE));
 
         let compiled = compile_from_statement(&proof.statement).unwrap();
         let mut circuit_hash = hash_circuit_v2(compiled.circuit());
@@ -1399,6 +1509,7 @@ mod tests {
             .collect();
         let before = transcript_hash(
             &proof.statement,
+            &context(),
             &proof.params,
             &circuit_hash,
             &reps,
@@ -1407,6 +1518,7 @@ mod tests {
         circuit_hash[0] ^= 1;
         let after = transcript_hash(
             &proof.statement,
+            &context(),
             &proof.params,
             &circuit_hash,
             &reps,
@@ -1416,11 +1528,11 @@ mod tests {
 
         let mut changed = proof.clone();
         changed.repetitions[0].commitment_root[0] ^= 1;
-        assert_ne!(base, transcript_for(&changed, &V2_SUITE));
+        assert_ne!(base, transcript_for(&changed, context(), &V2_SUITE));
 
         let mut changed = proof;
         changed.repetitions[0].assert_shares[0][0] += Fr::from(1u64);
-        assert_ne!(base, transcript_for(&changed, &V2_SUITE));
+        assert_ne!(base, transcript_for(&changed, context(), &V2_SUITE));
     }
 
     #[test]

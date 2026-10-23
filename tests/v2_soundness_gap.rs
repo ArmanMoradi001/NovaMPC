@@ -38,12 +38,18 @@ use mpcith_zk::v2::mpc::{
     encode_view_payload, recompute_linear_shares, run_mpc_emulation, PartyViewV2,
 };
 use mpcith_zk::v2::predicate::{compile_range, RangeStatementV2, StatementV2};
-use mpcith_zk::v2::proof::{verify, OpenedViewV2, RepetitionProofV2, V2Proof};
+use mpcith_zk::v2::proof::{
+    hash_context_v2, verify_statement, OpenedViewV2, RepetitionProofV2, V2Proof,
+};
 use mpcith_zk::v2::seed_tree::SeedTreeV2;
 use mpcith_zk::v2::sharing::PartySeedV2;
 use mpcith_zk::v2::suite::{V2Params, V2_PROOF_VERSION};
 use rand::rngs::StdRng;
 use rand::{RngCore, SeedableRng};
+
+fn context() -> [u8; 32] {
+    hash_context_v2(b"v2-soundness-gap")
+}
 
 fn assertions(circuit: &CircuitV2) -> Vec<(usize, Fr)> {
     circuit
@@ -254,9 +260,10 @@ fn known_gap_accepts_false_range_statement_for_two_of_three_hidden_parties() {
                 version: V2_PROOF_VERSION,
                 params: params.clone(),
                 statement: statement.clone(),
+                context: context(),
                 repetitions: vec![repetition],
             };
-            let result = verify(&proof, &params);
+            let result = verify_statement(&proof, &statement, context(), &params);
             if result.is_ok() {
                 accepted_this_attempt = true;
                 assert_ne!(

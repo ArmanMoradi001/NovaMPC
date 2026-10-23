@@ -34,11 +34,14 @@ lemmas that are still missing.
 
 The analysis follows the code in this tree, not an earlier design sketch:
 
-- `src/v2/suite.rs`: `V2_PROOF_VERSION = 2`, `V2_NUM_PARTIES = 3`,
+- `src/v2/suite.rs`: `V2_PROOF_VERSION = 3`, `V2_NUM_PARTIES = 3`,
   `V2Params`, suite identifiers.
-- `src/v2/proof.rs`: `prove`, `verify`, `verify_statement`, `verify_bytes`,
-  structural validation, transcript hashing, challenge derivation, and the
-  commitment checks.
+- `src/v2/proof.rs`: `prove`, the crate-private `verify`, the public
+  `verify_statement` and `verify_bytes_statement`, proof-version-3 context
+  binding, structural validation, transcript hashing, challenge derivation,
+  and the commitment checks. Version 3 binds a 32-byte context hash in the
+  proof and transcript; the public verifier pins the caller's expected
+  statement and context.
 - `src/v2/mpc.rs`: `run_mpc_emulation`, `recompute_linear_shares`,
   `verify_party_view`, `zero_share`, `mul_output_share`.
 - `src/v2/predicate.rs`: canonical range, membership, and combined circuits,

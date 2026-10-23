@@ -7,7 +7,9 @@
 use crate::{MpcithError, Result};
 
 /// Current v2 proof-format version. V1 proofs never carry this value.
-pub const V2_PROOF_VERSION: u16 = 2;
+///
+/// Version 3 binds a 32-byte context hash into the proof and transcript.
+pub const V2_PROOF_VERSION: u16 = 3;
 
 /// The v2 protocol family identifier.
 pub const V2_PROTOCOL_ID: &[u8] = b"NovaMPC-v2/proof/v1";
@@ -127,7 +129,7 @@ mod tests {
 
     #[test]
     fn suite_identifier_is_versioned() {
-        assert_eq!(V2_SUITE.version, 2);
+        assert_eq!(V2_SUITE.version, V2_PROOF_VERSION);
         assert_eq!(V2_SUITE.protocol_id, V2_PROTOCOL_ID);
         assert_eq!(V2_SUITE.field_id, V2_FIELD_ID);
         assert_eq!(V2_SUITE.poseidon2_id, V2_POSEIDON2_ID);

@@ -29,7 +29,9 @@ use mpcith_zk::v2::merkle::MerkleTreeV2;
 use mpcith_zk::v2::predicate::{
     compile_from_statement, CompiledV2, MembershipStatementV2, RangeStatementV2, StatementV2,
 };
-use mpcith_zk::v2::proof::{prove_combined, prove_membership, verify_statement, V2Proof};
+use mpcith_zk::v2::proof::{
+    hash_context_v2, prove_combined, prove_membership, verify_statement, V2Proof,
+};
 use mpcith_zk::v2::suite::V2Params;
 use mpcith_zk::{MpcithError, ProofParams, Result};
 
@@ -132,6 +134,7 @@ fn statement_for(mode: Mode, root: Fr, num_members: u32, depth: u32) -> Result<S
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn prove_for(
     mode: Mode,
     root: Fr,
@@ -139,10 +142,19 @@ fn prove_for(
     depth: u32,
     value: u32,
     member_proof: &mpcith_zk::v2::merkle::MerkleProofV2,
+    context: [u8; 32],
     params: &V2Params,
 ) -> Result<V2Proof> {
     match mode {
-        Mode::Membership => prove_membership(root, num_members, depth, value, member_proof, params),
+        Mode::Membership => prove_membership(
+            root,
+            num_members,
+            depth,
+            value,
+            member_proof,
+            context,
+            params,
+        ),
         Mode::Combined => prove_combined(
             RANGE_LO,
             RANGE_HI,
@@ -151,6 +163,7 @@ fn prove_for(
             depth,
             value,
             member_proof,
+            context,
             params,
         ),
     }
@@ -159,6 +172,7 @@ fn prove_for(
 fn run_case(mode: Mode, params: &V2Params, size: u32, iters: usize) -> Result<()> {
     let (num_members, depth, value, root, index, member_proof) = build_case(size)?;
     let statement = statement_for(mode, root, num_members, depth)?;
+    let context = hash_context_v2(b"v2-bench");
     let compiled = compile_from_statement(&statement)?;
     let (gate_count, mul_count) = count_gates(&compiled);
 
@@ -168,7 +182,16 @@ fn run_case(mode: Mode, params: &V2Params, size: u32, iters: usize) -> Result<()
 
     for _ in 0..iters {
         let start = Instant::now();
-        let proof = prove_for(mode, root, num_members, depth, value, &member_proof, params)?;
+        let proof = prove_for(
+            mode,
+            root,
+            num_members,
+            depth,
+            value,
+            &member_proof,
+            context,
+            params,
+        )?;
         prove_times.push(start.elapsed());
 
         let bytes = proof.to_bytes()?;
@@ -176,7 +199,7 @@ fn run_case(mode: Mode, params: &V2Params, size: u32, iters: usize) -> Result<()
         proof_sizes.push(bytes.len());
 
         let start = Instant::now();
-        verify_statement(&proof, &statement, params)?;
+        verify_statement(&proof, &statement, context, params)?;
         verify_times.push(start.elapsed());
     }
 
