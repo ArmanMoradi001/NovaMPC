@@ -156,5 +156,12 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
   are derived and reviewed.
 - Validation: documentation + `v3_phase0_model.py` numbers only; no code
   changed in this step.
-- Next step: Phase 3 prover/verifier/transcript implementation per
-  `V3_PROTOCOL.md`, presets experimental, no security language.
+## P4.1 — transcript and proof codec (`pending hash`)
+
+- Completed: `src/v3/transcript.rs` (domain-separated BLAKE3 transcript,
+  `h1 → Γ → h1' → (γ,γ') → hB → I` challenge order, deterministic ChaCha
+  sampling, canonical `circuit_hash_v3`, `hash_fr_vecs`) and `src/v3/proof.rs`
+  (typed `V3Proof`, canonical codec with magic/version/canonical-Fr/caps/no
+  trailing bytes, V2-magic rejection).
+- Validation: `cargo test --lib v3::` — 30 passed.
+- Next step: P4.2 prover (hints + commitments + responses).

@@ -13,5 +13,7 @@ pub mod constraints;
 pub mod decs;
 pub mod matrix;
 pub mod params;
+pub mod proof;
 pub mod sharing;
 pub mod suite;
+pub mod transcript;
