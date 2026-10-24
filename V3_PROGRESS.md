@@ -30,7 +30,7 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
   odd-layer duplication; tamper and input tests.
 - Validation: `cargo test --lib v3::` — 15 passed.
 - Next step: P1.5 degree-enforcing round (`decs.rs`).
-## P1.5 — degree-enforcing round (`pending hash`)
+## P1.5 — degree-enforcing round (`e3b260e`)
 
 - Completed: `src/v3/decs.rs` — `Γ`-combination (zero-padded), exact
   `poly_degree`/`meets_degree`, response evaluation, `verify_responses`
@@ -38,3 +38,12 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
 - Validation: `cargo test --lib v3::` — 19 passed.
 - Next step: Phase 2 constraint representation (`constraints.rs`); open item:
   exact PACS/`m₂` count for the combined circuit.
+
+## Phase 1 gate — foundations complete, no prover yet
+
+- All primitive tests pass (`cargo test --lib v3::` — 19 passed).
+- No V2 regression (`cargo test --lib` — 285 passed, 0 failed).
+- V2 code/tests/proofs untouched; `git status` shows only the pre-existing
+  `fixes.md` deletion plus new untracked/experimental v3 files.
+- Next step: P2.1 PACS/LPPC constraint compiler over the existing combined
+  V2 circuit with same-`x` semantics and V2 differential tests.
