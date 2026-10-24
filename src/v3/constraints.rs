@@ -428,6 +428,8 @@ mod tests {
     use crate::v2::merkle::MerkleTreeV2;
     use crate::v2::predicate::{compile_combined, compile_range};
     use crate::v3::params::V3Params;
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
 
     #[test]
     fn simple_circuit_compiles_to_expected_lppc_counts() {
@@ -524,6 +526,58 @@ mod tests {
             ),
             (43, 133)
         );
+    }
+
+    #[test]
+    fn seeded_random_combined_witnesses_match_v2_relation() {
+        let mut rng = StdRng::seed_from_u64(0x4e4f_5641_4d50_4333);
+        let mut member_set = std::collections::BTreeSet::new();
+        while member_set.len() < 12 {
+            member_set.insert(rng.gen_range(100..=900));
+        }
+        let members: Vec<u32> = member_set.into_iter().collect();
+        let tree = MerkleTreeV2::build(&members).unwrap();
+        let compiled =
+            compile_combined(100, 900, tree.root(), tree.num_members(), tree.depth()).unwrap();
+        let program =
+            ConstraintProgramV3::compile(compiled.circuit(), &V3Params::prototype_tau2()).unwrap();
+
+        for index in 0..members.len() {
+            let proof = tree.prove_membership(index as u32).unwrap();
+            let witness = compiled.witness_for(members[index], Some(&proof)).unwrap();
+            let matrix = program
+                .witness_matrix(compiled.circuit(), &witness)
+                .unwrap();
+            assert_eq!(
+                compiled.circuit().evaluate(&witness).is_ok(),
+                program.is_satisfied(&matrix).unwrap()
+            );
+            assert!(program.is_satisfied(&matrix).unwrap());
+
+            let mut outside_range = witness.clone();
+            outside_range[0] = Fr::from(901 + index as u64);
+            let matrix = program
+                .witness_matrix(compiled.circuit(), &outside_range)
+                .unwrap();
+            assert_eq!(
+                compiled.circuit().evaluate(&outside_range).is_ok(),
+                program.is_satisfied(&matrix).unwrap()
+            );
+            assert!(!program.is_satisfied(&matrix).unwrap());
+
+            let mut wrong_path = witness;
+            let sibling_start = 1 + 32 + 2 * 10 + 32;
+            let sibling_index = sibling_start + rng.gen_range(0..tree.depth() as usize);
+            wrong_path[sibling_index] += Fr::from(rng.gen_range(1..=10_000u64));
+            let matrix = program
+                .witness_matrix(compiled.circuit(), &wrong_path)
+                .unwrap();
+            assert_eq!(
+                compiled.circuit().evaluate(&wrong_path).is_ok(),
+                program.is_satisfied(&matrix).unwrap()
+            );
+            assert!(!program.is_satisfied(&matrix).unwrap());
+        }
     }
 
     #[test]
