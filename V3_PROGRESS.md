@@ -156,7 +156,7 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
   are derived and reviewed.
 - Validation: documentation + `v3_phase0_model.py` numbers only; no code
   changed in this step.
-## P4.1 — transcript and proof codec (`pending hash`)
+## P4.1 — transcript and proof codec (`bd30f2f`)
 
 - Completed: `src/v3/transcript.rs` (domain-separated BLAKE3 transcript,
   `h1 → Γ → h1' → (γ,γ') → hB → I` challenge order, deterministic ChaCha
@@ -164,7 +164,7 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
   (typed `V3Proof`, canonical codec with magic/version/canonical-Fr/caps/no
   trailing bytes, V2-magic rejection).
 - Validation: `cargo test --lib v3::` — 30 passed.
-## P4.2 — prover: hints, commitments, responses (`pending hash`)
+## P4.2 — prover: hints, commitments, responses (`504606c`)
 
 - Completed: `src/v3/sharing.rs` += `random_poly`/`eval_poly_all`/
   `random_poly_shares`; new `src/v3/hints.rs` (Π$/Π0/ΠΣ0 derivation,
@@ -178,7 +178,7 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
   misalign packed columns and is not used (recorded in `prover.rs`).
 - Validation: e2e honest-path verified (see P4.4); `cargo test --lib v3::`
   green.
-## P4.3 — verifier: all five protocol checks (`pending hash`)
+## P4.3 — verifier: all five protocol checks (`9fcb6a1`)
 
 - Completed: `src/v3/verifier.rs` (`verify_combined_v3`): header binding
   (params/statement/context/circuit-hash equality), recomputed challenges,
@@ -188,7 +188,7 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
   S/S′/Sξ use the deterministic smallest-not-opened rule both sides (sets
   never transmitted; recorded refinement of `V3_PROTOCOL.md` §1 row 7).
 - Validation: e2e + tamper tests pass (see P4.4).
-## P4.4 — tests, measurements, model comparison (`pending hash`)
+## P4.4 — tests, measurements, model comparison (`b301217`)
 
 - Completed: `tests/v3_prototype.rs` — honest accept + codec round-trip,
   seeded determinism, false-statement prove refusal, wrong
@@ -217,3 +217,19 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
 - Validation: `cargo test --lib` full suite green (see gate); V2
   untouched.
 - Next step: P4 gate record.
+
+## P4 gate — experimental implementation complete, no security claim
+
+- Prototype prover/verifier/transcript/codec implemented per
+  `V3_PROTOCOL.md`, commits `bd30f2f`/`504606c`/`9fcb6a1`/`b301217`.
+- Checks: `cargo test --lib` — 300 passed; `tests/v3_prototype.rs` — 5
+  passed; release measurement 215,034 B / prove ~411 s / verify ~200 s /
+  peak RSS ~57 MB at the prototype point (4.65× under 1 MB).
+- This is an experimental prototype only: presets experimental, P3.4
+  obligations (extractor, KZ-aware τ proof, QROM, grinding, ZK, review)
+  all open. Not secure, not zero-knowledge, not 127-bit.
+- V2 code/tests/docs unchanged; pre-existing `fixes.md` deletion and
+  untracked files preserved; nothing pushed.
+- Next step: hardening/measurement follow-ups only if tasked (broadcast
+  reconstruction optimization, perf); no prover-logic changes without a
+  new phase.
