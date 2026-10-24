@@ -297,8 +297,12 @@ impl CircuitBuilder {
                     .to_string(),
             ));
         }
-        let left_bits: Vec<usize> = (0..32).map(|_| self.xor_bit_pool.pop_front().unwrap()).collect();
-        let right_bits: Vec<usize> = (0..32).map(|_| self.xor_bit_pool.pop_front().unwrap()).collect();
+        let left_bits: Vec<usize> = (0..32)
+            .map(|_| self.xor_bit_pool.pop_front().unwrap())
+            .collect();
+        let right_bits: Vec<usize> = (0..32)
+            .map(|_| self.xor_bit_pool.pop_front().unwrap())
+            .collect();
         bit_decompose_on(self, left, &left_bits);
         bit_decompose_on(self, right, &right_bits);
 

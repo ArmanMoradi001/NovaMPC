@@ -14,8 +14,8 @@
 //! ```
 
 pub mod circuit;
-pub mod commitment;
 pub mod commit_merkle;
+pub mod commitment;
 pub mod error;
 pub mod fiat_shamir;
 pub mod merkle;
@@ -31,7 +31,7 @@ pub mod v2;
 
 pub use error::MpcithError;
 pub use params::ProofParams;
-pub use predicate::{Predicate, CompoundPredicate};
-pub use proof::{Proof, prove, prove_compound, verify_compound, verify_predicate};
+pub use predicate::{CompoundPredicate, Predicate};
+pub use proof::{prove, prove_compound, verify_compound, verify_predicate, Proof};
 
 pub type Result<T> = std::result::Result<T, MpcithError>;

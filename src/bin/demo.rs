@@ -8,13 +8,22 @@ fn separator(title: &str) {
     println!("{}", "═".repeat(60));
 }
 
-fn run_demo(label: &str, predicate: Predicate, witness: &[u32], public_inputs: &[u32], params: &ProofParams) {
+fn run_demo(
+    label: &str,
+    predicate: Predicate,
+    witness: &[u32],
+    public_inputs: &[u32],
+    params: &ProofParams,
+) {
     use std::time::Instant;
 
     println!("\n▶ {}", label);
     println!("  Witness:       {:?}", witness);
     println!("  Public inputs: {:?}", public_inputs);
-    println!("  Params:        N={}, M={}", params.num_parties, params.num_repetitions);
+    println!(
+        "  Params:        N={}, M={}",
+        params.num_parties, params.num_repetitions
+    );
 
     let t_prove = Instant::now();
     let proof = match prove(predicate.clone(), witness, public_inputs, params) {
@@ -34,7 +43,11 @@ fn run_demo(label: &str, predicate: Predicate, witness: &[u32], public_inputs: &
     let valid = verify_predicate(&predicate, &proof, public_inputs, params).unwrap_or(false);
     let verify_ms = t_verify.elapsed().as_millis();
 
-    println!("  Proof size:    {} bytes ({:.1} KB)", proof_bytes, proof_bytes as f64 / 1024.0);
+    println!(
+        "  Proof size:    {} bytes ({:.1} KB)",
+        proof_bytes,
+        proof_bytes as f64 / 1024.0
+    );
     println!("  Prove time:    {} ms", prove_ms);
     println!("  Verify time:   {} ms", verify_ms);
     println!("  Valid:         {}", if valid { "✓ YES" } else { "✗ NO" });
@@ -60,7 +73,9 @@ fn main() {
     separator("Predicate 2: Multiplication Check (x * y == z)");
     run_demo(
         "Prove: 6 * 7 == 42",
-        Predicate::MultiplicationCheck { expected_product: 42 },
+        Predicate::MultiplicationCheck {
+            expected_product: 42,
+        },
         &[6, 7],
         &[42],
         &fast,
@@ -79,7 +94,9 @@ fn main() {
     }
     run_demo(
         "Prove: 0b1010 XOR 0b1100 == 0b0110",
-        Predicate::XorCheck { expected_xor: 0b0110 },
+        Predicate::XorCheck {
+            expected_xor: 0b0110,
+        },
         &xor_witness,
         &[0b0110],
         &fast,
@@ -101,7 +118,9 @@ fn main() {
     demo_witness.extend_from_slice(&demo_mp.siblings);
     run_demo(
         "Prove: 42 ∈ {10, 20, 30, 42, 100}",
-        Predicate::SetMembership { members: members.clone() },
+        Predicate::SetMembership {
+            members: members.clone(),
+        },
         &demo_witness,
         &[demo_root],
         &fast,

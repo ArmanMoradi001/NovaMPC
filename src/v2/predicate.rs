@@ -490,11 +490,9 @@ pub fn compile_membership(root: Fr, num_members: u32, depth: u32) -> Result<Comp
 pub fn compile_from_statement(statement: &StatementV2) -> Result<CompiledV2> {
     match statement {
         StatementV2::Range(range) => compile_range(range.lo, range.hi),
-        StatementV2::Membership(membership) => compile_membership(
-            membership.root,
-            membership.num_members,
-            membership.depth,
-        ),
+        StatementV2::Membership(membership) => {
+            compile_membership(membership.root, membership.num_members, membership.depth)
+        }
         StatementV2::Combined { range, membership } => compile_combined(
             range.lo,
             range.hi,

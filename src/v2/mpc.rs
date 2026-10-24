@@ -69,13 +69,9 @@ pub struct PartyViewV2 {
 ///
 /// The seed is committed separately by the proof layer. Counts are explicit so
 /// that different vector shapes cannot produce the same byte string.
-pub fn encode_view_payload(
-    mul_output_shares: &[Fr],
-    residual_input_shares: &[Fr],
-) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(
-        16 + 32 * (mul_output_shares.len() + residual_input_shares.len()),
-    );
+pub fn encode_view_payload(mul_output_shares: &[Fr], residual_input_shares: &[Fr]) -> Vec<u8> {
+    let mut bytes =
+        Vec::with_capacity(16 + 32 * (mul_output_shares.len() + residual_input_shares.len()));
     bytes.extend_from_slice(&(mul_output_shares.len() as u64).to_be_bytes());
     for share in mul_output_shares {
         bytes.extend_from_slice(&crate::v2::field::encode_fr(share));

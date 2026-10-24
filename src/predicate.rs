@@ -234,15 +234,14 @@ impl CompoundPredicate {
     /// verifier derive byte-identical (equal-hash) circuits.
     fn merge_same_witness_circuits(c_left: &Circuit, c_right: &Circuit) -> Circuit {
         const LINK_WIRES: usize = 3;
-        let left_val = 0usize;             // left sub-predicate's primary input
+        let left_val = 0usize; // left sub-predicate's primary input
         let right_val = c_left.num_inputs; // right sub-predicate's primary input
 
         let num_inputs = c_left.num_inputs + c_right.num_inputs;
         let num_wires = c_left.num_wires + c_right.num_wires + LINK_WIRES;
         let num_outputs = c_left.num_outputs + c_right.num_outputs;
 
-        let mut gates =
-            Vec::with_capacity(c_left.gates.len() + c_right.gates.len() + LINK_WIRES);
+        let mut gates = Vec::with_capacity(c_left.gates.len() + c_right.gates.len() + LINK_WIRES);
 
         // The link gates read ONLY input wires, so they are emitted FIRST.
         // This matters for the MPC emulator: it pushes wire sharings in gate
@@ -449,7 +448,8 @@ fn compile_range_check(lo: u32, hi: u32) -> crate::Result<CompiledPredicate> {
             "RangeCheck requires hi - lo < 2^31 (got width {width}); \
              wider ranges make the bit-decomposition range proof vacuous"
         )));
-    }    let k = bits_needed(width);
+    }
+    let k = bits_needed(width);
 
     // Pre-allocate ALL input wires so they sit contiguously at the start.
     // Layout: [x, x_bits(32), shifted_bits(k), slack_bits(k)]
@@ -1018,10 +1018,22 @@ mod tests {
     fn test_c2_width_one_supported() {
         // width = 1: exactly two admissible values.
         let compiled = range_compile(10, 11).unwrap();
-        assert!(compiled.circuit.evaluate(&range_witness(10, 10, 11)).is_ok());
-        assert!(compiled.circuit.evaluate(&range_witness(11, 10, 11)).is_ok());
-        assert!(compiled.circuit.evaluate(&range_witness(9, 10, 11)).is_err());
-        assert!(compiled.circuit.evaluate(&range_witness(12, 10, 11)).is_err());
+        assert!(compiled
+            .circuit
+            .evaluate(&range_witness(10, 10, 11))
+            .is_ok());
+        assert!(compiled
+            .circuit
+            .evaluate(&range_witness(11, 10, 11))
+            .is_ok());
+        assert!(compiled
+            .circuit
+            .evaluate(&range_witness(9, 10, 11))
+            .is_err());
+        assert!(compiled
+            .circuit
+            .evaluate(&range_witness(12, 10, 11))
+            .is_err());
     }
 
     #[test]
@@ -1031,16 +1043,26 @@ mod tests {
         let hi = 2u32 * (1 << 30) - 1; // width = 2^31 - 2
         assert_eq!(hi - lo, (1u32 << 31) - 2);
         let compiled = range_compile(lo, hi).unwrap();
-        assert!(compiled.circuit.evaluate(&range_witness(lo, lo, hi)).is_ok());
-        assert!(compiled.circuit.evaluate(&range_witness(hi, lo, hi)).is_ok());
-        assert!(
-            compiled
-                .circuit
-                .evaluate(&range_witness(lo + (hi - lo) / 2, lo, hi))
-                .is_ok()
-        );
-        assert!(compiled.circuit.evaluate(&range_witness(lo - 1, lo, hi)).is_err());
-        assert!(compiled.circuit.evaluate(&range_witness(hi + 1, lo, hi)).is_err());
+        assert!(compiled
+            .circuit
+            .evaluate(&range_witness(lo, lo, hi))
+            .is_ok());
+        assert!(compiled
+            .circuit
+            .evaluate(&range_witness(hi, lo, hi))
+            .is_ok());
+        assert!(compiled
+            .circuit
+            .evaluate(&range_witness(lo + (hi - lo) / 2, lo, hi))
+            .is_ok());
+        assert!(compiled
+            .circuit
+            .evaluate(&range_witness(lo - 1, lo, hi))
+            .is_err());
+        assert!(compiled
+            .circuit
+            .evaluate(&range_witness(hi + 1, lo, hi))
+            .is_err());
     }
 
     #[test]
@@ -1052,7 +1074,10 @@ mod tests {
         for &x in &[lo, hi, 1u32 << 30] {
             assert!(compiled.circuit.evaluate(&range_witness(x, lo, hi)).is_ok());
         }
-        assert!(compiled.circuit.evaluate(&range_witness(hi + 1, lo, hi)).is_err());
+        assert!(compiled
+            .circuit
+            .evaluate(&range_witness(hi + 1, lo, hi))
+            .is_err());
     }
 
     #[test]
@@ -1087,10 +1112,22 @@ mod tests {
     fn test_c2_boundary_values() {
         let (lo, hi) = (100u32, 200u32);
         let compiled = range_compile(lo, hi).unwrap();
-        assert!(compiled.circuit.evaluate(&range_witness(99, lo, hi)).is_err()); // x = lo-1
-        assert!(compiled.circuit.evaluate(&range_witness(100, lo, hi)).is_ok()); // x = lo
-        assert!(compiled.circuit.evaluate(&range_witness(200, lo, hi)).is_ok()); // x = hi
-        assert!(compiled.circuit.evaluate(&range_witness(201, lo, hi)).is_err()); // x = hi+1
+        assert!(compiled
+            .circuit
+            .evaluate(&range_witness(99, lo, hi))
+            .is_err()); // x = lo-1
+        assert!(compiled
+            .circuit
+            .evaluate(&range_witness(100, lo, hi))
+            .is_ok()); // x = lo
+        assert!(compiled
+            .circuit
+            .evaluate(&range_witness(200, lo, hi))
+            .is_ok()); // x = hi
+        assert!(compiled
+            .circuit
+            .evaluate(&range_witness(201, lo, hi))
+            .is_err()); // x = hi+1
     }
 
     #[test]
@@ -1099,16 +1136,31 @@ mod tests {
         let lo = u32::MAX - 100;
         let hi = u32::MAX;
         let compiled = range_compile(lo, hi).unwrap();
-        assert!(compiled.circuit.evaluate(&range_witness(u32::MAX, lo, hi)).is_ok());
-        assert!(compiled.circuit.evaluate(&range_witness(u32::MAX - 50, lo, hi)).is_ok());
-        assert!(compiled.circuit.evaluate(&range_witness(lo, lo, hi)).is_ok());
+        assert!(compiled
+            .circuit
+            .evaluate(&range_witness(u32::MAX, lo, hi))
+            .is_ok());
+        assert!(compiled
+            .circuit
+            .evaluate(&range_witness(u32::MAX - 50, lo, hi))
+            .is_ok());
+        assert!(compiled
+            .circuit
+            .evaluate(&range_witness(lo, lo, hi))
+            .is_ok());
 
         // Below lo rejected...
-        assert!(compiled.circuit.evaluate(&range_witness(lo - 1, lo, hi)).is_err());
+        assert!(compiled
+            .circuit
+            .evaluate(&range_witness(lo - 1, lo, hi))
+            .is_err());
         // ...including the wrap-aliasing attempt x = 0: shifted would be
         // 2^32 - lo = 101 > width, forcing slack = width - shifted to wrap
         // to a huge value that fails the k=7-bit decomposition.
-        assert!(compiled.circuit.evaluate(&range_witness(0, lo, hi)).is_err());
+        assert!(compiled
+            .circuit
+            .evaluate(&range_witness(0, lo, hi))
+            .is_err());
 
         // A range reaching u32::MAX but wider than 2^31 is unsupported.
         assert!(range_compile(0, u32::MAX).is_err());
@@ -1137,9 +1189,11 @@ mod tests {
         // NOT be able to prove 0 ∈ S via padded index 3. The circuit itself
         // (not prove()) must reject it: index 3 violates index < 3.
         let members = vec![7u32, 8, 9];
-        let compiled = Predicate::SetMembership { members: members.clone() }
-            .compile()
-            .unwrap();
+        let compiled = Predicate::SetMembership {
+            members: members.clone(),
+        }
+        .compile()
+        .unwrap();
         let w = membership_witness_at(&members, 3, 0);
         assert_eq!(w[0], 0, "padded slot must hold zero");
         assert!(
@@ -1151,9 +1205,11 @@ mod tests {
     #[test]
     fn test_f1_all_real_members_provable_3set() {
         let members = vec![7u32, 8, 9];
-        let compiled = Predicate::SetMembership { members: members.clone() }
-            .compile()
-            .unwrap();
+        let compiled = Predicate::SetMembership {
+            members: members.clone(),
+        }
+        .compile()
+        .unwrap();
         for (idx, &value) in members.iter().enumerate() {
             let w = membership_witness_at(&members, idx, value);
             compiled.circuit.evaluate(&w).unwrap_or_else(|e| {
@@ -1166,9 +1222,11 @@ mod tests {
     fn test_f1_five_element_set_padding_rejected() {
         // 5 members pad to 8 leaves: indices 5,6,7 are padded zeros.
         let members = vec![11u32, 22, 33, 44, 55];
-        let compiled = Predicate::SetMembership { members: members.clone() }
-            .compile()
-            .unwrap();
+        let compiled = Predicate::SetMembership {
+            members: members.clone(),
+        }
+        .compile()
+        .unwrap();
         for (idx, &value) in members.iter().enumerate() {
             let w = membership_witness_at(&members, idx, value);
             compiled.circuit.evaluate(&w).unwrap_or_else(|e| {
@@ -1195,14 +1253,17 @@ mod tests {
         // No padding exists; the constraint is vacuous (pad = 0) and every
         // real member must still verify.
         let members = vec![10u32, 20, 30, 42];
-        let compiled = Predicate::SetMembership { members: members.clone() }
-            .compile()
-            .unwrap();
+        let compiled = Predicate::SetMembership {
+            members: members.clone(),
+        }
+        .compile()
+        .unwrap();
         for (idx, &value) in members.iter().enumerate() {
             let w = membership_witness_at(&members, idx, value);
-            compiled.circuit.evaluate(&w).unwrap_or_else(|e| {
-                panic!("power-of-two set member {value} at index {idx}: {e}")
-            });
+            compiled
+                .circuit
+                .evaluate(&w)
+                .unwrap_or_else(|e| panic!("power-of-two set member {value} at index {idx}: {e}"));
         }
         // Out-of-range index 4 does not exist even as a padded slot here.
         // Build its witness manually (siblings copied from index 3's path):
@@ -1222,7 +1283,9 @@ mod tests {
         // skipped — sound because the circuit forces leaf == root == the
         // sole member directly. No new depth-0 bug may be introduced.
         let members = vec![42u32];
-        let pred = Predicate::SetMembership { members: members.clone() };
+        let pred = Predicate::SetMembership {
+            members: members.clone(),
+        };
         let compiled = pred.compile().unwrap();
         let w = membership_witness_at(&members, 0, 42);
         compiled.circuit.evaluate(&w).unwrap();
@@ -1255,10 +1318,9 @@ mod tests {
         let root = tree.root();
         let depth = members.len().next_power_of_two().trailing_zeros() as usize;
 
-        let verifier = CompoundPredicate::range_and_membership_for_verify(
-            lo, hi, root, depth, members.len(),
-        )
-        .unwrap();
+        let verifier =
+            CompoundPredicate::range_and_membership_for_verify(lo, hi, root, depth, members.len())
+                .unwrap();
         assert_eq!(
             crate::fiat_shamir::hash_circuit(&prover.circuit),
             crate::fiat_shamir::hash_circuit(&verifier.circuit),
@@ -1267,9 +1329,8 @@ mod tests {
 
         // Fail-closed: a WRONG member count must change the circuit hash.
         for wrong in [members.len() - 1, members.len() + 1, 1] {
-            let bad = CompoundPredicate::range_and_membership_for_verify(
-                lo, hi, root, depth, wrong,
-            );
+            let bad =
+                CompoundPredicate::range_and_membership_for_verify(lo, hi, root, depth, wrong);
             match bad {
                 Ok(compiled_bad) => assert_ne!(
                     crate::fiat_shamir::hash_circuit(&prover.circuit),
@@ -1300,13 +1361,19 @@ mod tests {
         assert_eq!(tree.root(), 42, "single-leaf tree root must be the member");
 
         // Prover-side circuit: leaf == root, no hash/path gates.
-        let prover = Predicate::SetMembership { members: members.clone() }
-            .compile()
-            .unwrap();
+        let prover = Predicate::SetMembership {
+            members: members.clone(),
+        }
+        .compile()
+        .unwrap();
         assert_eq!(prover.circuit.gates.len(), 1);
         assert!(matches!(
             prover.circuit.gates[0],
-            Gate::AssertEq { input: 0, expected: 42, .. }
+            Gate::AssertEq {
+                input: 0,
+                expected: 42,
+                ..
+            }
         ));
 
         // Verification-side compiler must produce a hash-equal circuit.
@@ -1320,8 +1387,8 @@ mod tests {
         let cp = CompoundPredicate::range_and_membership(0, 100, members.clone())
             .compile()
             .unwrap();
-        let cv = CompoundPredicate::range_and_membership_for_verify(0, 100, tree.root(), 0, 1)
-            .unwrap();
+        let cv =
+            CompoundPredicate::range_and_membership_for_verify(0, 100, tree.root(), 0, 1).unwrap();
         assert_eq!(
             crate::fiat_shamir::hash_circuit(&cp.circuit),
             crate::fiat_shamir::hash_circuit(&cv.circuit),
@@ -1345,7 +1412,9 @@ mod tests {
         // members = [42], secret = 42 → prove + verify MUST succeed.
         let params = crate::params::ProofParams::fast_insecure();
         let members = vec![42u32];
-        let pred = Predicate::SetMembership { members: members.clone() };
+        let pred = Predicate::SetMembership {
+            members: members.clone(),
+        };
         let tree = MerkleTree::build(&members).unwrap();
         let root = tree.root();
 
@@ -1417,7 +1486,9 @@ mod tests {
         // Addition / multiplication: trivial 2-wire witnesses.
         for pred in [
             Predicate::AdditionCheck { expected_sum: 7 },
-            Predicate::MultiplicationCheck { expected_product: 12 },
+            Predicate::MultiplicationCheck {
+                expected_product: 12,
+            },
         ] {
             let compiled = pred.compile().unwrap();
             assert_eq!(pred.witness_size(), 2);
@@ -1441,7 +1512,10 @@ mod tests {
         assert_eq!(compiled_range.witness_size, 1 + 32 + k + k);
         assert_eq!(compiled_range.circuit.num_inputs, 1 + 32 + k + k);
         // The generated witness vector must have exactly that length.
-        assert_eq!(range.generate_witness(42).unwrap().len(), range.witness_size());
+        assert_eq!(
+            range.generate_witness(42).unwrap().len(),
+            range.witness_size()
+        );
 
         // SetMembership at several depths, including depth 0 and padding.
         for members in [
@@ -1449,7 +1523,9 @@ mod tests {
             vec![10u32, 20, 30, 42],
             vec![10u32, 20, 30, 42, 100],
         ] {
-            let pred = Predicate::SetMembership { members: members.clone() };
+            let pred = Predicate::SetMembership {
+                members: members.clone(),
+            };
             let compiled = pred.compile().unwrap();
             let depth = members.len().next_power_of_two().trailing_zeros() as usize;
             assert_eq!(pred.witness_size(), 2 + 2 * depth, "members={members:?}");

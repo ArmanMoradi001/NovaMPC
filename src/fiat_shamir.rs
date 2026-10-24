@@ -61,37 +61,61 @@ pub fn hash_circuit(circuit: &crate::circuit::Circuit) -> Vec<u8> {
     // Hash each gate's type and wire indices.
     for gate in &circuit.gates {
         match gate {
-            crate::circuit::Gate::Add { left, right, output } => {
+            crate::circuit::Gate::Add {
+                left,
+                right,
+                output,
+            } => {
                 hasher.update(b"ADD");
                 hasher.update(&left.to_le_bytes());
                 hasher.update(&right.to_le_bytes());
                 hasher.update(&output.to_le_bytes());
             }
-            crate::circuit::Gate::Mul { left, right, output } => {
+            crate::circuit::Gate::Mul {
+                left,
+                right,
+                output,
+            } => {
                 hasher.update(b"MUL");
                 hasher.update(&left.to_le_bytes());
                 hasher.update(&right.to_le_bytes());
                 hasher.update(&output.to_le_bytes());
             }
-            crate::circuit::Gate::Xor { left, right, output } => {
+            crate::circuit::Gate::Xor {
+                left,
+                right,
+                output,
+            } => {
                 hasher.update(b"XOR");
                 hasher.update(&left.to_le_bytes());
                 hasher.update(&right.to_le_bytes());
                 hasher.update(&output.to_le_bytes());
             }
-            crate::circuit::Gate::AddConst { input, constant, output } => {
+            crate::circuit::Gate::AddConst {
+                input,
+                constant,
+                output,
+            } => {
                 hasher.update(b"ADDC");
                 hasher.update(&input.to_le_bytes());
                 hasher.update(&constant.to_le_bytes());
                 hasher.update(&output.to_le_bytes());
             }
-            crate::circuit::Gate::MulConst { input, constant, output } => {
+            crate::circuit::Gate::MulConst {
+                input,
+                constant,
+                output,
+            } => {
                 hasher.update(b"MULC");
                 hasher.update(&input.to_le_bytes());
                 hasher.update(&constant.to_le_bytes());
                 hasher.update(&output.to_le_bytes());
             }
-            crate::circuit::Gate::AssertEq { input, expected, output } => {
+            crate::circuit::Gate::AssertEq {
+                input,
+                expected,
+                output,
+            } => {
                 hasher.update(b"AEQC");
                 hasher.update(&input.to_le_bytes());
                 hasher.update(&expected.to_le_bytes());

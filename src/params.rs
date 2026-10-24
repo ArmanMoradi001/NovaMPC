@@ -1,4 +1,4 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 use crate::circuit::{Circuit, Gate};
 
@@ -73,8 +73,7 @@ impl ProofParams {
     /// configuration used here (2/3). Requires `num_parties >= 2`.
     pub fn for_soundness_bits(target_bits: f64, num_parties: usize) -> Self {
         assert!(num_parties >= 2, "need at least 2 parties");
-        let log2_gain =
-            (num_parties as f64 / (num_parties - 1) as f64).log2();
+        let log2_gain = (num_parties as f64 / (num_parties - 1) as f64).log2();
         let m = (target_bits / log2_gain).ceil() as usize;
         Self {
             num_parties,
@@ -246,8 +245,11 @@ impl ProofParams {
                 .and_then(|v| v.checked_add(assert_rows_bytes)),
         )?;
 
-        let public_inputs_bytes =
-            size_ok(num_public_inputs.checked_mul(4).and_then(|v| v.checked_add(8)))?;
+        let public_inputs_bytes = size_ok(
+            num_public_inputs
+                .checked_mul(4)
+                .and_then(|v| v.checked_add(8)),
+        )?;
         let expected_outputs_bytes =
             size_ok(num_outputs.checked_mul(4).and_then(|v| v.checked_add(8)))?;
         let circuit_bytes = size_ok(gates_bytes.checked_add(8 + 8 + 8 + 8))?;
@@ -261,7 +263,10 @@ impl ProofParams {
                 .and_then(|v| v.checked_add(8 + 8)), // num_circuit_wires + num_circuit_outputs
         )?;
 
-        size_ok(m.checked_mul(per_rep_bytes).and_then(|v| v.checked_add(fixed_bytes)))
+        size_ok(
+            m.checked_mul(per_rep_bytes)
+                .and_then(|v| v.checked_add(fixed_bytes)),
+        )
     }
 
     /// Validate parameters are sensible.
@@ -296,8 +301,10 @@ mod tests {
         let p = ProofParams::fast_insecure();
         let bits = p.soundness_bits();
         let expected = 10.0 * (3.0_f64 / 2.0).log2();
-        assert!((bits - expected).abs() < 1e-10,
-            "fast_insecure: got {bits}, expected {expected}");
+        assert!(
+            (bits - expected).abs() < 1e-10,
+            "fast_insecure: got {bits}, expected {expected}"
+        );
     }
 
     #[test]
@@ -305,8 +312,10 @@ mod tests {
         let p = ProofParams::balanced();
         let bits = p.soundness_bits();
         let expected = 96.0 * (3.0_f64 / 2.0).log2();
-        assert!((bits - expected).abs() < 1e-10,
-            "balanced: got {bits}, expected {expected}");
+        assert!(
+            (bits - expected).abs() < 1e-10,
+            "balanced: got {bits}, expected {expected}"
+        );
     }
 
     #[test]
@@ -412,9 +421,13 @@ mod tests {
             &tree.prove_membership(2),
         ));
         let public_inputs = vec![0u32, 1000, tree.root()];
-        let proof =
-            crate::proof::prove_compound(compound, &full, &public_inputs, &params).unwrap();
-        check_estimate(&params, &compiled.circuit, public_inputs.len(), proof.serialized_size());
+        let proof = crate::proof::prove_compound(compound, &full, &public_inputs, &params).unwrap();
+        check_estimate(
+            &params,
+            &compiled.circuit,
+            public_inputs.len(),
+            proof.serialized_size(),
+        );
     }
 
     #[test]
@@ -424,22 +437,37 @@ mod tests {
         // and never a bogus estimate.
         use crate::predicate::Predicate;
 
-        let compiled = Predicate::AdditionCheck { expected_sum: 7 }.compile().unwrap();
+        let compiled = Predicate::AdditionCheck { expected_sum: 7 }
+            .compile()
+            .unwrap();
         let base = ProofParams::fast_insecure();
         let invalid = [
-            ProofParams { num_parties: 0, ..base.clone() },
-            ProofParams { num_parties: 1, ..base.clone() },
-            ProofParams { num_parties: 2, ..base.clone() },
-            ProofParams { num_parties: 4, ..base.clone() },
-            ProofParams { num_repetitions: 0, ..base.clone() },
+            ProofParams {
+                num_parties: 0,
+                ..base.clone()
+            },
+            ProofParams {
+                num_parties: 1,
+                ..base.clone()
+            },
+            ProofParams {
+                num_parties: 2,
+                ..base.clone()
+            },
+            ProofParams {
+                num_parties: 4,
+                ..base.clone()
+            },
+            ProofParams {
+                num_repetitions: 0,
+                ..base.clone()
+            },
         ];
 
         for params in invalid {
             match params.estimated_proof_bytes(&compiled.circuit, 1) {
                 Err(crate::MpcithError::InvalidParams(_)) => {}
-                other => panic!(
-                    "params {params:?} must return InvalidParams, got {other:?}"
-                ),
+                other => panic!("params {params:?} must return InvalidParams, got {other:?}"),
             }
         }
     }
@@ -451,7 +479,9 @@ mod tests {
         // arithmetic must turn that into an error instead of wrapping.
         use crate::predicate::Predicate;
 
-        let compiled = Predicate::AdditionCheck { expected_sum: 7 }.compile().unwrap();
+        let compiled = Predicate::AdditionCheck { expected_sum: 7 }
+            .compile()
+            .unwrap();
         let params = ProofParams {
             num_parties: 3,
             num_repetitions: usize::MAX,

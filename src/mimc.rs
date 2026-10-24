@@ -27,7 +27,12 @@ pub fn mimc_constants(num_rounds: usize) -> Vec<u32> {
         let bytes = h.as_bytes();
         let mut i = 0;
         while i + 4 <= bytes.len() && constants.len() < num_rounds {
-            constants.push(u32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]));
+            constants.push(u32::from_le_bytes([
+                bytes[i],
+                bytes[i + 1],
+                bytes[i + 2],
+                bytes[i + 3],
+            ]));
             i += 4;
         }
         counter += 1;
@@ -51,10 +56,10 @@ pub fn build_mimc_hash(
     let mut right = right_wire;
 
     for &ci in constants.iter().take(num_rounds) {
-        let temp = builder.add_const(right, ci);    // right + c_i
-        let sq = builder.mul(temp, temp);            // (right + c_i)^2
-        let cu = builder.mul(sq, temp);              // (right + c_i)^3
-        let new_right = builder.add(left, cu);       // left + (right + c_i)^3
+        let temp = builder.add_const(right, ci); // right + c_i
+        let sq = builder.mul(temp, temp); // (right + c_i)^2
+        let cu = builder.mul(sq, temp); // (right + c_i)^3
+        let new_right = builder.add(left, cu); // left + (right + c_i)^3
         let new_left = right;
 
         left = new_left;
@@ -101,11 +106,7 @@ mod tests {
             let circuit = builder.build(2);
             let trace = circuit.evaluate(&[l, r]).unwrap();
             let out = circuit.outputs(&trace);
-            assert_eq!(
-                (out[0], out[1]),
-                native,
-                "mismatch for input ({l}, {r})"
-            );
+            assert_eq!((out[0], out[1]), native, "mismatch for input ({l}, {r})");
         }
     }
 
@@ -125,10 +126,7 @@ mod tests {
             .collect();
         for i in 0..hashes.len() {
             for j in (i + 1)..hashes.len() {
-                assert_ne!(
-                    hashes[i], hashes[j],
-                    "collision between pairs {i} and {j}"
-                );
+                assert_ne!(hashes[i], hashes[j], "collision between pairs {i} and {j}");
             }
         }
     }

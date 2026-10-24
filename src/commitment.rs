@@ -72,10 +72,7 @@ pub struct CommitmentMatrix {
 impl CommitmentMatrix {
     pub fn new(num_repetitions: usize, num_parties: usize) -> Self {
         Self {
-            commitments: vec![
-                vec![Commitment([0u8; 32]); num_parties];
-                num_repetitions
-            ],
+            commitments: vec![vec![Commitment([0u8; 32]); num_parties]; num_repetitions],
             num_repetitions,
             num_parties,
         }
@@ -112,7 +109,12 @@ mod tests {
         let opening = CommitmentOpening { randomness };
 
         assert!(verify_commitment(domain, &opening, data, &commitment));
-        assert!(!verify_commitment(domain, &opening, b"wrong data", &commitment));
+        assert!(!verify_commitment(
+            domain,
+            &opening,
+            b"wrong data",
+            &commitment
+        ));
     }
 
     #[test]

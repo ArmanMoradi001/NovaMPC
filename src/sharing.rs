@@ -20,11 +20,7 @@ pub struct Sharing {
 
 impl Sharing {
     /// Create a new random additive sharing of `value` among `num_parties`.
-    pub fn share<R: RngCore + CryptoRng>(
-        value: u32,
-        num_parties: usize,
-        rng: &mut R,
-    ) -> Self {
+    pub fn share<R: RngCore + CryptoRng>(value: u32, num_parties: usize, rng: &mut R) -> Self {
         assert!(num_parties >= 2, "Need at least 2 parties");
         let mut shares = vec![0u32; num_parties];
 
@@ -62,11 +58,7 @@ impl Sharing {
 
     /// Create a random XOR secret sharing of `value` among `num_parties`.
     /// Reconstruct by XOR-ing all shares.
-    pub fn share_xor<R: RngCore + CryptoRng>(
-        value: u32,
-        num_parties: usize,
-        rng: &mut R,
-    ) -> Self {
+    pub fn share_xor<R: RngCore + CryptoRng>(value: u32, num_parties: usize, rng: &mut R) -> Self {
         assert!(num_parties >= 2, "Need at least 2 parties");
         let mut shares = vec![0u32; num_parties];
 
@@ -115,7 +107,11 @@ impl Sharing {
     /// Multiply a sharing by a public constant. Linear — no interaction needed.
     pub fn mul_const(&self, constant: u32) -> Sharing {
         Sharing {
-            shares: self.shares.iter().map(|&s| s.wrapping_mul(constant)).collect(),
+            shares: self
+                .shares
+                .iter()
+                .map(|&s| s.wrapping_mul(constant))
+                .collect(),
         }
     }
 

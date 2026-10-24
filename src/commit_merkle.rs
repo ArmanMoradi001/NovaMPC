@@ -174,11 +174,13 @@ mod tests {
 
     #[test]
     fn test_eight_leaves() {
-        let leaves: Vec<[u8; 32]> = (1u32..=8).map(|v| {
-            let mut buf = [0u8; 32];
-            buf[..4].copy_from_slice(&v.to_le_bytes());
-            buf
-        }).collect();
+        let leaves: Vec<[u8; 32]> = (1u32..=8)
+            .map(|v| {
+                let mut buf = [0u8; 32];
+                buf[..4].copy_from_slice(&v.to_le_bytes());
+                buf
+            })
+            .collect();
         let tree = CommitTree::build(&leaves);
         let root = tree.root();
         assert_ne!(root, [0u8; 32]);
@@ -208,9 +210,7 @@ mod tests {
         );
 
         // Depth-3 tree (8 leaves): same low 3 bits, index 3 + 8 = 11.
-        let leaves8: Vec<[u8; 32]> = (1u8..=8)
-            .map(|v| [v; 32])
-            .collect();
+        let leaves8: Vec<[u8; 32]> = (1u8..=8).map(|v| [v; 32]).collect();
         let tree8 = CommitTree::build(&leaves8);
         let valid8 = tree8.prove_membership(3);
         assert!(valid8.verify());

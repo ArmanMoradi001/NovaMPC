@@ -139,7 +139,8 @@ pub const MAX_PROOF_CIRCUIT_GATES: usize = 1 << 22;
 fn validate_proof_structure(proof: &Proof, params: &ProofParams) -> Result<()> {
     let circuit = &proof.circuit;
     let num_parties = params.num_parties;
-    let malformed = |msg: String| MpcithError::VerificationFailed(format!("malformed proof: {msg}"));
+    let malformed =
+        |msg: String| MpcithError::VerificationFailed(format!("malformed proof: {msg}"));
 
     // ── Embedded-circuit shape ────────────────────────────────────────────
     if circuit.num_wires == 0 {
@@ -165,7 +166,9 @@ fn validate_proof_structure(proof: &Proof, params: &ProofParams) -> Result<()> {
     }
     // The declared dimensions must describe exactly the embedded circuit;
     // otherwise `output_start` and output indexing lose their meaning.
-    if proof.num_circuit_wires != circuit.num_wires || proof.num_circuit_outputs != circuit.num_outputs {
+    if proof.num_circuit_wires != circuit.num_wires
+        || proof.num_circuit_outputs != circuit.num_outputs
+    {
         return Err(malformed(format!(
             "declared dimensions ({}, {}) inconsistent with embedded circuit ({}, {})",
             proof.num_circuit_wires,
@@ -185,15 +188,24 @@ fn validate_proof_structure(proof: &Proof, params: &ProofParams) -> Result<()> {
     }
 
     // ── Gate wire references ──────────────────────────────────────────────
-    let wire_ok =
-        |w: usize| w < circuit.num_wires;
+    let wire_ok = |w: usize| w < circuit.num_wires;
     for (gi, gate) in circuit.gates.iter().enumerate() {
         let refs_ok = match gate {
-            Gate::Add { left, right, output }
-            | Gate::Mul { left, right, output }
-            | Gate::Xor { left, right, output } => {
-                wire_ok(*left) && wire_ok(*right) && wire_ok(*output)
+            Gate::Add {
+                left,
+                right,
+                output,
             }
+            | Gate::Mul {
+                left,
+                right,
+                output,
+            }
+            | Gate::Xor {
+                left,
+                right,
+                output,
+            } => wire_ok(*left) && wire_ok(*right) && wire_ok(*output),
             Gate::AddConst { input, output, .. }
             | Gate::MulConst { input, output, .. }
             | Gate::AssertEq { input, output, .. } => wire_ok(*input) && wire_ok(*output),
@@ -228,9 +240,7 @@ fn validate_proof_structure(proof: &Proof, params: &ProofParams) -> Result<()> {
 
     // ── Per-repetition structure ──────────────────────────────────────────
     for (rep, rp) in proof.repetitions.iter().enumerate() {
-        let ctx = |msg: String| {
-            malformed(format!("repetition {rep}: {msg}"))
-        };
+        let ctx = |msg: String| malformed(format!("repetition {rep}: {msg}"));
         if rp.hidden_party >= num_parties {
             return Err(ctx(format!(
                 "hidden_party {} out of range (num_parties = {num_parties})",
@@ -292,7 +302,9 @@ fn validate_proof_structure(proof: &Proof, params: &ProofParams) -> Result<()> {
         }
         for (p, &s) in seen.iter().enumerate() {
             if !s && p != rp.hidden_party {
-                return Err(ctx(format!("non-hidden party {p} missing from opened views")));
+                return Err(ctx(format!(
+                    "non-hidden party {p} missing from opened views"
+                )));
             }
         }
         // Seed-tree co-path must match the tree depth exactly (validated
@@ -318,9 +330,7 @@ fn validate_proof_structure(proof: &Proof, params: &ProofParams) -> Result<()> {
         }
         for row in rp.assert_shares.iter().chain(rp.output_shares.iter()) {
             if row.len() != num_parties {
-                return Err(ctx(
-                    "per-party share row has wrong party count".into(),
-                ));
+                return Err(ctx("per-party share row has wrong party count".into()));
             }
         }
     }
@@ -586,11 +596,14 @@ pub(crate) fn verify_unchecked(
 
     let num_parties = params.num_parties;
     let num_outputs = proof.num_circuit_outputs;
-    let output_start = proof.num_circuit_wires.checked_sub(num_outputs).ok_or_else(|| {
-        MpcithError::VerificationFailed(
-            "malformed proof: num_outputs exceeds num_circuit_wires".into(),
-        )
-    })?;
+    let output_start = proof
+        .num_circuit_wires
+        .checked_sub(num_outputs)
+        .ok_or_else(|| {
+            MpcithError::VerificationFailed(
+                "malformed proof: num_outputs exceeds num_circuit_wires".into(),
+            )
+        })?;
     let assert_constraints = proof.circuit.assert_constraints();
 
     // ── Step 1: Recompute Fiat-Shamir challenges ───────────────────────────
@@ -661,7 +674,7 @@ pub(crate) fn verify_unchecked(
             )));
         }
 
-        // The opened party indices must be exactly {0..num_parties} \ 
+        // The opened party indices must be exactly {0..num_parties} \
         // {hidden_party}. Without these checks a prover could submit
         // duplicate indices (e.g. {(h+2) % N} twice), leaving one party
         // entirely unverified — its assert/output share entries would then
@@ -996,7 +1009,9 @@ mod tests {
         );
 
         // Entirely different predicate family.
-        let q2 = Predicate::MultiplicationCheck { expected_product: 12 };
+        let q2 = Predicate::MultiplicationCheck {
+            expected_product: 12,
+        };
         assert!(
             verify_predicate(&q2, &proof_p, &[7], &params).is_err(),
             "AdditionCheck proof must not verify under MultiplicationCheck"
@@ -1090,7 +1105,9 @@ mod tests {
         let params = fast_params();
         let x = 0b1010u32;
         let y = 0b1100u32;
-        let pred = Predicate::XorCheck { expected_xor: x ^ y };
+        let pred = Predicate::XorCheck {
+            expected_xor: x ^ y,
+        };
         // CircuitBuilder::xor() expands XOR into bit-decomposition gates, so the
         // witness must be [x, y] followed by the 32 bits of x and the 32 bits of y.
         let mut witness = vec![x, y];
@@ -1150,9 +1167,8 @@ mod tests {
         ];
 
         for params in &bad_params {
-            let result = std::panic::catch_unwind(|| {
-                prove_compiled(&compiled, &[3, 4], &[7], params)
-            });
+            let result =
+                std::panic::catch_unwind(|| prove_compiled(&compiled, &[3, 4], &[7], params));
             match result {
                 Err(_) => panic!(
                     "prove_compiled panicked for N={} M={}",
@@ -1435,9 +1451,7 @@ mod tests {
 
     /// Prove AdditionCheck repeatedly until one proof per hidden-party value
     /// has been observed (bounded attempts).
-    fn proofs_for_every_hidden(
-        params: &ProofParams,
-    ) -> Vec<Proof> {
+    fn proofs_for_every_hidden(params: &ProofParams) -> Vec<Proof> {
         let mut per_hidden: Vec<Option<Proof>> = vec![None; params.num_parties];
         for _ in 0..500 {
             let proof = prove(
@@ -1471,8 +1485,7 @@ mod tests {
             assert_eq!(orig.len(), params.num_parties - 1);
 
             let mut forged = proof;
-            forged.repetitions[0].opened_views =
-                vec![orig[0].clone(), orig[0].clone()];
+            forged.repetitions[0].opened_views = vec![orig[0].clone(), orig[0].clone()];
             let result = verify_unchecked(&forged, &[7], &params);
             assert!(
                 result.is_err(),
@@ -1554,8 +1567,7 @@ mod tests {
 
             // E: same set, different order — verification is order-independent.
             let mut reordered = proof;
-            reordered.repetitions[0].opened_views =
-                vec![orig[1].clone(), orig[0].clone()];
+            reordered.repetitions[0].opened_views = vec![orig[1].clone(), orig[0].clone()];
             assert!(
                 verify_unchecked(&reordered, &[7], &params).unwrap(),
                 "E: valid permutation of the opened set must still verify"
@@ -1719,7 +1731,9 @@ mod tests {
     fn test_f1_end_to_end_small_set_prove_verify() {
         let params = fast_params();
         let members = f1_members();
-        let pred = Predicate::SetMembership { members: members.clone() };
+        let pred = Predicate::SetMembership {
+            members: members.clone(),
+        };
         let tree = crate::merkle::MerkleTree::build(&members).unwrap();
         let root = tree.root();
         for idx in 0..members.len() {
@@ -1803,13 +1817,21 @@ mod tests {
             let exec = run_mpc_emulation(&circuit, &witness, &seeds, &mut rng).unwrap();
             output_shares.push(
                 (output_start..num_wires)
-                    .map(|w| (0..num_parties).map(|p| exec.shared_trace.wires[w].shares[p]).collect())
+                    .map(|w| {
+                        (0..num_parties)
+                            .map(|p| exec.shared_trace.wires[w].shares[p])
+                            .collect()
+                    })
                     .collect(),
             );
             assert_shares.push(
                 assert_constraints
                     .iter()
-                    .map(|&(w, _)| (0..num_parties).map(|p| exec.shared_trace.wires[w].shares[p]).collect())
+                    .map(|&(w, _)| {
+                        (0..num_parties)
+                            .map(|p| exec.shared_trace.wires[w].shares[p])
+                            .collect()
+                    })
                     .collect(),
             );
             execs.push(exec);
@@ -1965,7 +1987,10 @@ mod tests {
             "expected the residual party to be opened in at least one repetition"
         );
         let result = verify_unchecked(&proof, &[root], &params);
-        assert!(result.is_err(), "tampered leaf_index share must cause rejection");
+        assert!(
+            result.is_err(),
+            "tampered leaf_index share must cause rejection"
+        );
     }
 
     // ── H-2 regression: verifier robustness against malformed proofs ──────
@@ -2004,9 +2029,21 @@ mod tests {
     /// does not exist for this gate type.
     fn h2_set_gate_wire(gate: &mut Gate, slot: usize, val: usize) -> bool {
         let mut refs: Vec<&mut usize> = match gate {
-            Gate::Add { left, right, output }
-            | Gate::Mul { left, right, output }
-            | Gate::Xor { left, right, output } => vec![left, right, output],
+            Gate::Add {
+                left,
+                right,
+                output,
+            }
+            | Gate::Mul {
+                left,
+                right,
+                output,
+            }
+            | Gate::Xor {
+                left,
+                right,
+                output,
+            } => vec![left, right, output],
             Gate::AddConst { input, output, .. }
             | Gate::MulConst { input, output, .. }
             | Gate::AssertEq { input, output, .. } => vec![input, output],
@@ -2028,7 +2065,9 @@ mod tests {
         let pa = prove(pred_add.clone(), &[3, 4], &[7], &params).unwrap();
         assert!(verify_predicate(&pred_add, &pa, &[7], &params).unwrap());
 
-        let pred_mul = Predicate::MultiplicationCheck { expected_product: 12 };
+        let pred_mul = Predicate::MultiplicationCheck {
+            expected_product: 12,
+        };
         let pm = prove(pred_mul.clone(), &[3, 4], &[12], &params).unwrap();
         assert!(verify_predicate(&pred_mul, &pm, &[12], &params).unwrap());
 
@@ -2041,20 +2080,40 @@ mod tests {
         for i in 0..32 {
             w.push((y >> i) & 1);
         }
-        let px = prove(Predicate::XorCheck { expected_xor: x ^ y }, &w, &[x ^ y], &params).unwrap();
-        assert!(verify_predicate(&Predicate::XorCheck { expected_xor: x ^ y }, &px, &[x ^ y], &params).unwrap());
+        let px = prove(
+            Predicate::XorCheck {
+                expected_xor: x ^ y,
+            },
+            &w,
+            &[x ^ y],
+            &params,
+        )
+        .unwrap();
+        assert!(verify_predicate(
+            &Predicate::XorCheck {
+                expected_xor: x ^ y
+            },
+            &px,
+            &[x ^ y],
+            &params
+        )
+        .unwrap());
 
         let members = f1_members();
         let tree = crate::merkle::MerkleTree::build(&members).unwrap();
         let root = tree.root();
         let pw = prove(
-            Predicate::SetMembership { members: members.clone() },
+            Predicate::SetMembership {
+                members: members.clone(),
+            },
             &set_membership_witness(&tree.prove_membership(1)),
             &[root],
             &params,
         )
         .unwrap();
-        assert!(verify_predicate(&Predicate::SetMembership { members }, &pw, &[root], &params).unwrap());
+        assert!(
+            verify_predicate(&Predicate::SetMembership { members }, &pw, &[root], &params).unwrap()
+        );
 
         let pr = prove(
             Predicate::RangeCheck { lo: 0, hi: 1000 },
@@ -2063,12 +2122,24 @@ mod tests {
             &params,
         )
         .unwrap();
-        assert!(verify_predicate(&Predicate::RangeCheck { lo: 0, hi: 1000 }, &pr, &[0, 1000], &params).unwrap());
+        assert!(verify_predicate(
+            &Predicate::RangeCheck { lo: 0, hi: 1000 },
+            &pr,
+            &[0, 1000],
+            &params
+        )
+        .unwrap());
 
         // Serialized roundtrip (the realistic networked path).
         let bytes = bincode::serialize(&pr).unwrap();
         let rt: Proof = bincode::deserialize(&bytes).unwrap();
-        assert!(verify_predicate(&Predicate::RangeCheck { lo: 0, hi: 1000 }, &rt, &[0, 1000], &params).unwrap());
+        assert!(verify_predicate(
+            &Predicate::RangeCheck { lo: 0, hi: 1000 },
+            &rt,
+            &[0, 1000],
+            &params
+        )
+        .unwrap());
     }
 
     #[test]
@@ -2083,17 +2154,22 @@ mod tests {
         .unwrap(); // num_inputs = 67
         let n = params.num_parties;
         let snapshot = proof.clone();
-        assert_rejects_no_panic("short residual_input_shares", &[0, 1000], &params, move || {
-            let mut p = snapshot;
-            for rep in p.repetitions.iter_mut() {
-                for ov in rep.opened_views.iter_mut() {
-                    if ov.view.party_idx == n - 1 && !ov.view.residual_input_shares.is_empty() {
-                        ov.view.residual_input_shares.truncate(n); // 3 << 67
+        assert_rejects_no_panic(
+            "short residual_input_shares",
+            &[0, 1000],
+            &params,
+            move || {
+                let mut p = snapshot;
+                for rep in p.repetitions.iter_mut() {
+                    for ov in rep.opened_views.iter_mut() {
+                        if ov.view.party_idx == n - 1 && !ov.view.residual_input_shares.is_empty() {
+                            ov.view.residual_input_shares.truncate(n); // 3 << 67
+                        }
                     }
                 }
-            }
-            p
-        });
+                p
+            },
+        );
     }
 
     #[test]
@@ -2118,8 +2194,7 @@ mod tests {
                 let mut p = snapshot;
                 for rep in p.repetitions.iter_mut() {
                     for ov in rep.opened_views.iter_mut() {
-                        if ov.view.party_idx == n - 1 && !ov.view.residual_input_shares.is_empty()
-                        {
+                        if ov.view.party_idx == n - 1 && !ov.view.residual_input_shares.is_empty() {
                             let last = *ov.view.residual_input_shares.last().unwrap();
                             ov.view.residual_input_shares.push(last);
                         }
@@ -2153,7 +2228,9 @@ mod tests {
     fn test_h2_mul_output_shares_wrong_length() {
         let params = fast_params();
         let proof = prove(
-            Predicate::MultiplicationCheck { expected_product: 12 },
+            Predicate::MultiplicationCheck {
+                expected_product: 12,
+            },
             &[3, 4],
             &[12],
             &params,
@@ -2229,8 +2306,13 @@ mod tests {
     #[test]
     fn test_h2_num_wires_too_large_no_allocation() {
         let params = fast_params();
-        let proof = prove(Predicate::AdditionCheck { expected_sum: 7 }, &[3, 4], &[7], &params)
-            .unwrap();
+        let proof = prove(
+            Predicate::AdditionCheck { expected_sum: 7 },
+            &[3, 4],
+            &[7],
+            &params,
+        )
+        .unwrap();
 
         for bad in [
             MAX_PROOF_CIRCUIT_WIRES + 1,
@@ -2238,25 +2320,25 @@ mod tests {
             usize::MAX,
         ] {
             let snapshot = proof.clone();
-            assert_rejects_no_panic(
-                &format!("num_wires = {bad:#x}"),
-                &[7],
-                &params,
-                move || {
-                    let mut p = snapshot;
-                    p.circuit.num_wires = bad;
-                    h2_sync_circuit_fields(&mut p);
-                    p
-                },
-            );
+            assert_rejects_no_panic(&format!("num_wires = {bad:#x}"), &[7], &params, move || {
+                let mut p = snapshot;
+                p.circuit.num_wires = bad;
+                h2_sync_circuit_fields(&mut p);
+                p
+            });
         }
     }
 
     #[test]
     fn test_h2_num_outputs_exceeds_wires_invalid_output_start() {
         let params = fast_params();
-        let proof = prove(Predicate::AdditionCheck { expected_sum: 7 }, &[3, 4], &[7], &params)
-            .unwrap(); // 4 wires, 1 output
+        let proof = prove(
+            Predicate::AdditionCheck { expected_sum: 7 },
+            &[3, 4],
+            &[7],
+            &params,
+        )
+        .unwrap(); // 4 wires, 1 output
 
         // num_outputs > num_wires would make output_start underflow; the
         // checked computation must turn this into Err. Pad the public-share
@@ -2296,8 +2378,13 @@ mod tests {
     #[test]
     fn test_h2_expected_outputs_wrong_length() {
         let params = fast_params();
-        let proof = prove(Predicate::AdditionCheck { expected_sum: 7 }, &[3, 4], &[7], &params)
-            .unwrap();
+        let proof = prove(
+            Predicate::AdditionCheck { expected_sum: 7 },
+            &[3, 4],
+            &[7],
+            &params,
+        )
+        .unwrap();
 
         let snapshot = proof.clone();
         assert_rejects_no_panic("expected_outputs too short", &[7], &params, move || {
@@ -2316,8 +2403,13 @@ mod tests {
     #[test]
     fn test_h2_invalid_party_indices() {
         let params = fast_params();
-        let proof = prove(Predicate::AdditionCheck { expected_sum: 7 }, &[3, 4], &[7], &params)
-            .unwrap();
+        let proof = prove(
+            Predicate::AdditionCheck { expected_sum: 7 },
+            &[3, 4],
+            &[7],
+            &params,
+        )
+        .unwrap();
         let n = params.num_parties;
 
         let snapshot = proof.clone();
@@ -2349,8 +2441,13 @@ mod tests {
     #[test]
     fn test_h2_malformed_seed_tree_data() {
         let params = fast_params();
-        let proof = prove(Predicate::AdditionCheck { expected_sum: 7 }, &[3, 4], &[7], &params)
-            .unwrap();
+        let proof = prove(
+            Predicate::AdditionCheck { expected_sum: 7 },
+            &[3, 4],
+            &[7],
+            &params,
+        )
+        .unwrap();
 
         // co_path too short
         let snapshot = proof.clone();
@@ -2371,8 +2468,13 @@ mod tests {
     #[test]
     fn test_h2_malformed_merkle_paths() {
         let params = fast_params();
-        let proof = prove(Predicate::AdditionCheck { expected_sum: 7 }, &[3, 4], &[7], &params)
-            .unwrap();
+        let proof = prove(
+            Predicate::AdditionCheck { expected_sum: 7 },
+            &[3, 4],
+            &[7],
+            &params,
+        )
+        .unwrap();
 
         // auth path too short
         let snapshot = proof.clone();
@@ -2400,7 +2502,7 @@ mod tests {
         });
     }
 
-#[test]
+    #[test]
     fn test_h2_fuzz_mutated_serialized_proofs_never_panic() {
         // Property test: take a valid, mul-heavy proof, serialize it, flip
         // pseudo-random bits, deserialize + verify. Invariant: verification
@@ -2426,7 +2528,13 @@ mod tests {
 
         // Untouched roundtrip verifies.
         let clean = serde_json::to_string(&proof).unwrap();
-        assert!(verify_predicate(&Predicate::RangeCheck { lo: 0, hi: 1000 }, &serde_json::from_str::<Proof>(&clean).unwrap(), &[0, 1000], &params).unwrap());
+        assert!(verify_predicate(
+            &Predicate::RangeCheck { lo: 0, hi: 1000 },
+            &serde_json::from_str::<Proof>(&clean).unwrap(),
+            &[0, 1000],
+            &params
+        )
+        .unwrap());
 
         // xorshift64* — deterministic, no external rng dependency drift.
         let mut state: u64 = 0x243F_6A88_85A3_08D3;

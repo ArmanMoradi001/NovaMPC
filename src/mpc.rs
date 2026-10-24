@@ -727,7 +727,10 @@ mod tests {
 
         let expected = a ^ b ^ c;
         assert_eq!(exec.output_values, vec![expected]);
-        assert_eq!(exec.shared_trace.wires[circuit.num_wires - 1].reconstruct(), expected);
+        assert_eq!(
+            exec.shared_trace.wires[circuit.num_wires - 1].reconstruct(),
+            expected
+        );
 
         verify_all_views(&circuit, &seeds, &exec);
     }
