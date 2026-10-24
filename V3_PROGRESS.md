@@ -130,3 +130,15 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
   logic changed.
 - Validation: `cargo test --lib v3::decs` re-run below.
 - Next step: P3.3 exact interactive protocol specification.
+## P3.3 — exact interactive protocol (`pending hash`)
+
+- Wrote `V3_PROTOCOL.md`: per-repetition message table (salt + `h1`, `Γ`,
+  `h1'`, batching `γ/γ'`, broadcast hash, `I`, openings + `S/Sξ`
+  responses), five verifier checks each tied to a Protocol 5 / Lemma 3 /
+  Theorem 1 justification, byte-to-Eq.16 mapping, and the interactive
+  `ε₁` terms for both parameter points.
+- Specified-but-unreviewed deltas vs FR25b: `2λ` salt (SmallWood practice),
+  single collapsed broadcast hash (`t = 1` for ΠLigero), `κi = 0`.
+- Validation: documentation only; model numbers re-verified against
+  `v3_phase0_model.py` output.
+- Next step: P3.4 Fiat–Shamir/QROM analysis and gate decision.
