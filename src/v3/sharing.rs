@@ -26,7 +26,7 @@ pub fn party_point(s: usize, i: usize) -> Fr {
 }
 
 /// Evaluate a coefficient-form polynomial at `x` (Horner).
-fn eval_poly(coeffs: &[Fr], x: Fr) -> Fr {
+pub(crate) fn eval_poly(coeffs: &[Fr], x: Fr) -> Fr {
     let mut acc = Fr::zero();
     for c in coeffs.iter().rev() {
         acc *= x;

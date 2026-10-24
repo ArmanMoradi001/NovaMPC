@@ -9,6 +9,7 @@
 //! commitment/opening support, and the degree-enforcing round.
 
 pub mod commit;
+pub mod decs;
 pub mod matrix;
 pub mod params;
 pub mod sharing;

@@ -23,10 +23,18 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
   coefficient interpolation + `degree_within_bound`; tamper/input tests.
 - Validation: `cargo test --lib v3::` — 11 passed.
 - Next step: P1.4 Merkle commitment/opening support (`commit.rs`).
-## P1.4 — Merkle commitment/opening (`pending hash`)
+## P1.4 — Merkle commitment/opening (`8fb1082`)
 
 - Completed: `src/v3/commit.rs` — domain-separated BLAKE3 leaf/internal
   commits (canonical `Fr` encoding reused from v2), root/path/verify with
   odd-layer duplication; tamper and input tests.
 - Validation: `cargo test --lib v3::` — 15 passed.
 - Next step: P1.5 degree-enforcing round (`decs.rs`).
+## P1.5 — degree-enforcing round (`pending hash`)
+
+- Completed: `src/v3/decs.rs` — `Γ`-combination (zero-padded), exact
+  `poly_degree`/`meets_degree`, response evaluation, `verify_responses`
+  (consistency + interpolated degree); honest/high-degree/tamper tests.
+- Validation: `cargo test --lib v3::` — 19 passed.
+- Next step: Phase 2 constraint representation (`constraints.rs`); open item:
+  exact PACS/`m₂` count for the combined circuit.
