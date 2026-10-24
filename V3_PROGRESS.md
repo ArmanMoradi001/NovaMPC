@@ -142,7 +142,7 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
 - Validation: documentation only; model numbers re-verified against
   `v3_phase0_model.py` output.
 - Next step: P3.4 Fiat–Shamir/QROM analysis and gate decision.
-## P3.4 — Fiat–Shamir/QROM analysis and gate decision (`pending hash`)
+## P3.4 — Fiat–Shamir/QROM analysis and gate decision (`acc7ca9`)
 
 - Wrote `V3_FIAT_SHAMIR.md`: FS construction (3 challenges × τ, `κi = 0`),
   classical-ROM template (SmallWood Thm 9: `ΣQ²/2^{2λ} + ΣQi·εi/2^{κi}`),
