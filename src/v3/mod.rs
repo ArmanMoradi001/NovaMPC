@@ -19,3 +19,4 @@ pub mod prover;
 pub mod sharing;
 pub mod suite;
 pub mod transcript;
+pub mod verifier;

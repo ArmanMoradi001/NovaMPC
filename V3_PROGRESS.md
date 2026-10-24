@@ -178,4 +178,14 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
   misalign packed columns and is not used (recorded in `prover.rs`).
 - Validation: e2e honest-path verified (see P4.4); `cargo test --lib v3::`
   green.
-- Next step: P4.3 verifier checks.
+## P4.3 — verifier: all five protocol checks (`pending hash`)
+
+- Completed: `src/v3/verifier.rs` (`verify_combined_v3`): header binding
+  (params/statement/context/circuit-hash equality), recomputed challenges,
+  exact-count enforcement, Merkle path checks, per-batch broadcast
+  recomputation + interpolation + hB comparison, outcome checks
+  (α=0, Σα′=Σγ′t), DECS recomputation + interpolation + h1' comparison.
+  S/S′/Sξ use the deterministic smallest-not-opened rule both sides (sets
+  never transmitted; recorded refinement of `V3_PROTOCOL.md` §1 row 7).
+- Validation: e2e + tamper tests pass (see P4.4).
+- Next step: P4.4 tests, measurements, model comparison.
