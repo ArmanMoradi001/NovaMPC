@@ -15,7 +15,7 @@
 //! (`Γ`) moves to the transcript in Phase 3.
 
 use ark_bn254::Fr;
-use ark_ff::{Field, One, Zero};
+use ark_ff::Zero;
 
 use crate::v3::sharing::{eval_poly, interpolate_coeffs};
 use crate::{MpcithError, Result};
@@ -57,10 +57,7 @@ pub fn meets_degree(coeffs: &[Fr], max_degree: usize) -> bool {
 }
 
 /// Evaluate every combination response at the given points (prover side).
-pub fn evaluate_responses(
-    combinations: &[Vec<Fr>],
-    points: &[Fr],
-) -> Vec<Vec<Fr>> {
+pub fn evaluate_responses(combinations: &[Vec<Fr>], points: &[Fr]) -> Vec<Vec<Fr>> {
     combinations
         .iter()
         .map(|r| points.iter().map(|x| eval_poly(r, *x)).collect())
@@ -89,10 +86,13 @@ pub fn verify_responses(
             gamma.len()
         )));
     }
-    if points.len() < max_degree + 1 {
+    // `d+1` evaluations always interpolate to some degree-`d` polynomial, so
+    // they cannot detect a malicious degree-`d+1` response. Require one more
+    // evaluation before checking the claimed degree bound.
+    if points.len() < max_degree + 2 {
         return Err(MpcithError::InvalidParams(format!(
-            "v3 DECS needs at least {} opened points, got {}",
-            max_degree + 1,
+            "v3 DECS needs at least {} opened points for degree testing, got {}",
+            max_degree + 2,
             points.len()
         )));
     }
@@ -144,6 +144,7 @@ mod tests {
     use super::*;
     use crate::v3::params::V3Params;
     use crate::v3::sharing::{party_point, share};
+    use ark_ff::One;
     use ark_ff::UniformRand;
     use rand::SeedableRng;
     use rand_chacha::ChaCha20Rng;
@@ -172,14 +173,33 @@ mod tests {
         let d_beta = s + ell - 1;
         let rows = honest_rows(s, ell, 4, n);
         let mut r = rng();
-        let gamma: Vec<Vec<Fr>> = (0..2).map(|_| (0..4).map(|_| Fr::rand(&mut r)).collect()).collect();
-        let points: Vec<Fr> = (0..d_beta + 1).map(|i| party_point(s, i)).collect();
-        let combos: Vec<Vec<Fr>> = gamma.iter().map(|g| combine_rows(&rows, g).unwrap()).collect();
+        let gamma: Vec<Vec<Fr>> = (0..2)
+            .map(|_| (0..4).map(|_| Fr::rand(&mut r)).collect())
+            .collect();
+        let points: Vec<Fr> = (0..d_beta + 2).map(|i| party_point(s, i)).collect();
+        let combos: Vec<Vec<Fr>> = gamma
+            .iter()
+            .map(|g| combine_rows(&rows, g).unwrap())
+            .collect();
         assert!(combos.iter().all(|c| meets_degree(c, d_beta)));
-        let row_evals: Vec<Vec<Fr>> =
-            rows.iter().map(|p| points.iter().map(|x| eval_poly(p, *x)).collect()).collect();
+        let row_evals: Vec<Vec<Fr>> = rows
+            .iter()
+            .map(|p| points.iter().map(|x| eval_poly(p, *x)).collect())
+            .collect();
         let responses = evaluate_responses(&combos, &points);
         assert!(verify_responses(&row_evals, &gamma, &responses, &points, d_beta).unwrap());
+
+        // A d+1-point view is not enough to check a degree-d bound: every such
+        // vector interpolates to some polynomial of degree at most d.
+        let short_points = &points[..d_beta + 1];
+        let short_rows: Vec<Vec<Fr>> = rows
+            .iter()
+            .map(|poly| short_points.iter().map(|x| eval_poly(poly, *x)).collect())
+            .collect();
+        let short_responses = evaluate_responses(&combos, short_points);
+        assert!(
+            verify_responses(&short_rows, &gamma, &short_responses, short_points, d_beta).is_err()
+        );
     }
 
     #[test]
@@ -193,12 +213,22 @@ mod tests {
         rows.push(bad);
         // Nonzero challenge weight on the bad row forces the combination over
         // degree with probability 1 - 1/|F|; use weight 1 deterministically.
-        let gamma = vec![vec![Fr::from(1u64), Fr::from(2u64), Fr::from(3u64), Fr::from(1u64)]];
+        let gamma = vec![vec![
+            Fr::from(1u64),
+            Fr::from(2u64),
+            Fr::from(3u64),
+            Fr::from(1u64),
+        ]];
         let points: Vec<Fr> = (0..d_beta + 2).map(|i| party_point(s, i)).collect();
-        let combos: Vec<Vec<Fr>> = gamma.iter().map(|g| combine_rows(&rows, g).unwrap()).collect();
+        let combos: Vec<Vec<Fr>> = gamma
+            .iter()
+            .map(|g| combine_rows(&rows, g).unwrap())
+            .collect();
         assert!(!meets_degree(&combos[0], d_beta));
-        let row_evals: Vec<Vec<Fr>> =
-            rows.iter().map(|p| points.iter().map(|x| eval_poly(p, *x)).collect()).collect();
+        let row_evals: Vec<Vec<Fr>> = rows
+            .iter()
+            .map(|p| points.iter().map(|x| eval_poly(p, *x)).collect())
+            .collect();
         let responses = evaluate_responses(&combos, &points);
         assert!(!verify_responses(&row_evals, &gamma, &responses, &points, d_beta).unwrap());
     }
@@ -209,13 +239,12 @@ mod tests {
         let d_beta = s + ell - 1;
         let rows = honest_rows(s, ell, 2, n);
         let gamma = vec![vec![Fr::from(1u64), Fr::from(1u64)]];
-        let points: Vec<Fr> = (0..d_beta + 1).map(|i| party_point(s, i)).collect();
-        let row_evals: Vec<Vec<Fr>> =
-            rows.iter().map(|p| points.iter().map(|x| eval_poly(p, *x)).collect()).collect();
-        let mut responses = evaluate_responses(
-            &[combine_rows(&rows, &gamma[0]).unwrap()],
-            &points,
-        );
+        let points: Vec<Fr> = (0..d_beta + 2).map(|i| party_point(s, i)).collect();
+        let row_evals: Vec<Vec<Fr>> = rows
+            .iter()
+            .map(|p| points.iter().map(|x| eval_poly(p, *x)).collect())
+            .collect();
+        let mut responses = evaluate_responses(&[combine_rows(&rows, &gamma[0]).unwrap()], &points);
         responses[0][0] += Fr::from(1u64);
         assert!(!verify_responses(&row_evals, &gamma, &responses, &points, d_beta).unwrap());
     }
@@ -228,7 +257,11 @@ mod tests {
         assert!(combine_rows(&[vec![Fr::one()]], &[Fr::one(), Fr::one()]).is_err());
         // Mixed lengths are zero-padded, not rejected.
         assert_eq!(
-            combine_rows(&[vec![Fr::one()], vec![Fr::one(), Fr::one()]], &[Fr::one(), Fr::one()]).unwrap(),
+            combine_rows(
+                &[vec![Fr::one()], vec![Fr::one(), Fr::one()]],
+                &[Fr::one(), Fr::one()]
+            )
+            .unwrap(),
             vec![Fr::from(2u64), Fr::one()]
         );
         assert!(verify_responses(&[], &[], &[], &[], 0).is_err());

@@ -68,8 +68,8 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
 - Validation: `cargo test` — 290 library tests and all integration suites
   passed (two expensive V2 high-M tests remain intentionally ignored). Model rerun gives
   197.0 KiB for the recommended prototype point and 88.2 KiB for the `τ=1`
-  reference point after row-alignment correction. Existing warning in
-  `src/v3/decs.rs` (`unused import: Field`) remains.
+  reference point after row-alignment correction. The DECS helper's imports
+  were subsequently cleaned up.
 - Security status: this direct relation checker does not implement LPPC's
   randomized aggregation, MPC, DECS transcript, or Fiat–Shamir proof; it makes
   no security claim.
@@ -85,3 +85,19 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
 - Next step: before Phase 3 prover work, independently review vector/row
   ordering against FR25b and complete the exact Q-ROM/grinding analysis. Keep
   extraction and ZK arguments open; do not call parameters secure.
+
+## Pre-Phase-3 DECS audit
+
+- Review found that the local degree-test helper accepted only `d+1` opened
+  evaluations. That is insufficient: any `d+1` values interpolate to a
+  degree-at-most-`d` polynomial. `verify_responses` now requires `d+2`
+  distinct protocol points, consistent with the `binom(N,d_beta+2)` term used
+  in the FR25b soundness bound. A regression test confirms the `d+1` case is
+  rejected.
+- This is a helper-level check only. The DECS transcript, its exact message
+  encoding, and proof-size accounting have not been implemented or verified.
+- Validation after the fix: `cargo test --lib v3::decs::` — 4 passed;
+  `cargo test --quiet` — 290 library tests and all integration suites passed
+  (two existing expensive tests remain ignored).
+- Phase 3 remains gated on the promised independent FR25b row/order and
+  Fiat–Shamir/QROM analysis. No security claim is made.
