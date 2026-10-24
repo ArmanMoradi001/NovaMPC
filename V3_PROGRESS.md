@@ -130,7 +130,7 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
   logic changed.
 - Validation: `cargo test --lib v3::decs` re-run below.
 - Next step: P3.3 exact interactive protocol specification.
-## P3.3 — exact interactive protocol (`pending hash`)
+## P3.3 — exact interactive protocol (`875b23e`)
 
 - Wrote `V3_PROTOCOL.md`: per-repetition message table (salt + `h1`, `Γ`,
   `h1'`, batching `γ/γ'`, broadcast hash, `I`, openings + `S/Sξ`
@@ -142,3 +142,19 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
 - Validation: documentation only; model numbers re-verified against
   `v3_phase0_model.py` output.
 - Next step: P3.4 Fiat–Shamir/QROM analysis and gate decision.
+## P3.4 — Fiat–Shamir/QROM analysis and gate decision (`pending hash`)
+
+- Wrote `V3_FIAT_SHAMIR.md`: FS construction (3 challenges × τ, `κi = 0`),
+  classical-ROM template (SmallWood Thm 9: `ΣQ²/2^{2λ} + ΣQi·εi/2^{κi}`),
+  KZ20a (eprint 2020/837) forgery shape and why FR25b's τ rule alone is
+  insufficient, concrete numbers (`τ=2`: `Q·ε² ≈ 2^{−227}` worst round,
+  collision floor `≈2^{−128}`; `τ=1`: `≈2^{−64}`, fails), QROM coverage
+  gap (DFMS19 is 3-round-only; SmallWood/FR25b classical), five precise
+  open proof obligations.
+- Gate: CONDITIONAL GO for implementation (protocol fully specified, no
+  invented formulas); NO-GO for any security claim until obligations 1–5
+  are derived and reviewed.
+- Validation: documentation + `v3_phase0_model.py` numbers only; no code
+  changed in this step.
+- Next step: Phase 3 prover/verifier/transcript implementation per
+  `V3_PROTOCOL.md`, presets experimental, no security language.
