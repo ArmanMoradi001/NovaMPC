@@ -158,6 +158,13 @@ the bad edge and rejects. Thus two of three choices accept. The test samples 48
 Fiat-Shamir challenges and observes both outcomes. This demonstrates that the
 2/3 bound is tight for the implemented schedule.
 
+The same attack ports to the combined circuit: a valid member outside the
+claimed range, with only the range booleanity constraints broken, is accepted
+for two hidden choices. See
+`known_gap_ports_to_combined_range_and_membership` in the same test file. This
+confirms the gap is structural (skipped Mul edge plus hidden assertion share),
+not range-circuit-specific. It remains a known, unfixed protocol gap.
+
 The attack uses no hash collision and no cryptanalytic break. It uses only the
 hidden assertion-share gap and the skipped Mul edge.
 

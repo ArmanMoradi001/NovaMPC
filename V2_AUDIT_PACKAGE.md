@@ -4,7 +4,7 @@
 **Proof status:** 2/3 soundness dossier is `DRAFT / AWAITING EXTERNAL REVIEW`;
 knowledge soundness, zero knowledge, side channels, and primitive assumptions
 are unresolved.  
-**Code baseline:** proof format v3, `[STEP-04]` commit `0fcd1e1`.  
+**Code baseline:** proof format v3; Step 06 adversarial/high-M suite.  
 **Companion documents:** [`V2_SOUNDNESS_2_3.md`](V2_SOUNDNESS_2_3.md),
 [`V2_SECURITY_ANALYSIS.md`](V2_SECURITY_ANALYSIS.md).
 
@@ -118,7 +118,8 @@ collision ceiling is also about 128 bits.
 - Conditional 2/3 per-repetition soundness: for a fixed pre-challenge prefix and
   a false statement, at most two of the three hidden choices pass.
 - Tightness: a concrete false range statement is accepted for hidden choices 0
-  and 1 and rejected for hidden choice 2.
+  and 1 and rejected for hidden choice 2. The same hidden-neighbour mechanism
+  ports to the combined range+membership circuit.
 - Conditional `q * (2/3)^M` query-loss bound.
 
 ### 4.2 What is not established
@@ -223,39 +224,48 @@ proof with a v2 proof; the magic and version checks are tested.
 ```text
 cargo test --lib v2:: -- --test-threads=1
 cargo test --test v2_integration --test v2_soundness_gap --test v2_transaction --test v2_parameter_arithmetic -- --test-threads=1
+cargo test --test v2_adversarial --test v2_transaction --test v2_integration --test v2_soundness_gap -- --test-threads=1
 cargo clippy --all-targets
 ```
 
-Observed at `[STEP-04]`:
+Observed after Step 06:
 
 - 99 v2 library tests passed.
 - 6 v2 integration tests passed.
-- 1 soundness-gap test passed; it prints the expected 2/3 evidence.
-- 5 transaction tests passed.
+- 2 soundness-gap tests passed: the range forgery and the combined-circuit port.
 - 1 parameter-arithmetic test passed.
-- Clippy reports style warnings in v2 (manual `is_multiple_of`, loop-index
-  lints, and one `match`/`if` simplification); no errors. These are not security
-  findings.
+- 5 transaction tests passed.
+- 8 adversarial tests passed.
+- Clippy reports style warnings in v1/v2 (manual `is_multiple_of`, loop-index
+  lints, and a few simplifications); no errors. These are not security findings.
 
 ### 7.2 High-M evidence
 
-The ignored high-M test and its release-profile run are added in Step 06. The
-audit package must be updated with the measured proof size and elapsed time
-after that run. Do not reduce `M` to make the test fast.
+The ignored high-M test was run in release mode:
 
-Planned command:
-
-```bash
+```text
 cargo test --release --test v2_high_m -- --ignored --nocapture
 ```
 
+Observed on the benchmark host (range-only `10 <= x <= 1000`, `x = 42`):
+
+| Preset | `M` | proof bytes | prove ms | verify ms |
+|---|---:|---:|---:|---:|
+| `secure_127()` | 223 | 2,279,379 | 114 | 43 |
+| `secure_127_grinding_2_32()` | 277 | 2,853,947 | 127 | 53 |
+
+These are local CPU-only measurements, not deployment latencies. The proof
+sizes are for the range-only circuit; membership and combined proofs are much
+larger (see `V2_BENCHMARKS.md`). Do not reduce `M` to make the test faster.
+
 ### 7.3 Adversarial evidence
 
-The adversarial suite is added in Step 06. It must cover statement/root
-substitution, context replay, membership/path tampering, serialization, and
-v1/v2 separation. The existing `tests/v2_soundness_gap.rs`,
-`tests/v2_transaction.rs`, and `tests/v2_integration.rs` already cover the
-current regressions; Step 06 extends them.
+`tests/v2_adversarial.rs` covers statement/root substitution, context replay,
+membership/path tampering, serialization bounds, and v1/v2 format separation.
+`tests/v2_integration.rs` and `tests/v2_transaction.rs` cover the honest public
+API and the transaction trust boundary. `tests/v2_soundness_gap.rs` records both
+the range forgery and its successful port to the combined circuit; that is a
+known protocol gap, not a fixed regression.
 
 ### 7.4 Full-suite status
 
@@ -270,7 +280,8 @@ claim a full green run without evidence.
 
 1. **2/3, not 1/3.** The implemented opening schedule has a concrete 2/3
    forgery. The parameter choice pays for it with repetitions; it does not
-   eliminate it.
+   eliminate it. The forgery also ports to the combined range+membership
+   circuit, so it is structural rather than range-specific.
 2. **Knowledge soundness.** The three-opening argument is special soundness
    only; the Fiat-Shamir extractor and its losses are unresolved.
 3. **Zero knowledge.** The simulator sketch lacks commitment hiding, seed-tree
@@ -308,9 +319,10 @@ production security, proven soundness, audit completion, or 128-bit security.
 
 ```bash
 cargo test --lib v2:: -- --test-threads=1
-cargo test --test v2_integration --test v2_soundness_gap --test v2_transaction --test v2_parameter_arithmetic -- --test-threads=1
+cargo test --test v2_integration --test v2_soundness_gap --test v2_transaction --test v2_parameter_arithmetic --test v2_adversarial -- --test-threads=1
 cargo test --test v2_soundness_gap -- --nocapture
 cargo test --test v2_parameter_arithmetic -- --nocapture
+cargo test --release --test v2_high_m -- --ignored --nocapture
 cargo clippy --all-targets
 ```
 

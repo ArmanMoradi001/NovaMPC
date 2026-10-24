@@ -294,6 +294,15 @@ Fiat-Shamir challenges and observes both outcomes; it is evidence for the
 mechanism, not a precise probability estimate. Theorem 1 and this attack show
 that `2/3` is tight for the implemented schedule.
 
+The same hidden-neighbour attack is not specific to the range circuit.
+`tests/v2_soundness_gap.rs::known_gap_ports_to_combined_range_and_membership`
+keeps a valid membership path for `x = 30` in the set `{10,20,30,42}`, claims the
+false combined statement `100 <= x <= 200`, and breaks only the range
+booleanity constraints. The forged combined proof is accepted for `h = 0` and
+`h = 1` and rejected for `h = 2`. The 2/3 event is therefore a structural
+property of the skipped Mul edge and the hidden assertion share, not a
+range-only defect. It is a known gap and is **not fixed** by this roadmap.
+
 ### 5.5 Why not 1/3
 
 A 1/3 claim would require binding the hidden party's assertion share to its

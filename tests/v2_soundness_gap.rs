@@ -34,10 +34,13 @@ use ark_bn254::Fr;
 use mpcith_zk::v2::circuit::{CircuitV2, GateV2};
 use mpcith_zk::v2::commit_tree::CommitTreeV2;
 use mpcith_zk::v2::commitment::commit_view_v2;
+use mpcith_zk::v2::merkle::MerkleTreeV2;
 use mpcith_zk::v2::mpc::{
     encode_view_payload, recompute_linear_shares, run_mpc_emulation, PartyViewV2,
 };
-use mpcith_zk::v2::predicate::{compile_range, RangeStatementV2, StatementV2};
+use mpcith_zk::v2::predicate::{
+    compile_combined, compile_range, MembershipStatementV2, RangeStatementV2, StatementV2,
+};
 use mpcith_zk::v2::proof::{
     hash_context_v2, verify_statement, OpenedViewV2, RepetitionProofV2, V2Proof,
 };
@@ -60,6 +63,20 @@ fn assertions(circuit: &CircuitV2) -> Vec<(usize, Fr)> {
             _ => None,
         })
         .collect()
+}
+
+/// Nonlinear (Mul-gate) index for a wire, if that wire is a Mul output.
+fn mul_output_index(circuit: &CircuitV2, wire: usize) -> Option<usize> {
+    let mut mul_idx = 0usize;
+    for gate in circuit.gates() {
+        if let GateV2::Mul { output, .. } = gate {
+            if output.index() == wire {
+                return Some(mul_idx);
+            }
+            mul_idx += 1;
+        }
+    }
+    None
 }
 
 /// Build a witness for the false range statement. The layout is the canonical
@@ -145,6 +162,148 @@ fn forge_repetition(
         opened_views,
         assert_shares,
     }
+}
+
+/// Run the same hidden-neighbour forgery against any circuit whose only failed
+/// assertions are Mul-output booleanity checks. Returns
+/// `(accepted, caught_at_h2, last_errors)`.
+///
+/// This deliberately panics if a failed assertion is not a Mul output: that is
+/// the signal that the range attack does not port to the supplied relation.
+fn sample_mul_output_forgery(
+    circuit: &CircuitV2,
+    statement: &StatementV2,
+    witness: &[Fr],
+    attempts: usize,
+    seed: [u8; 32],
+) -> (usize, usize, Vec<String>) {
+    let params = V2Params::new(3, 1);
+    let mut rng = StdRng::from_seed(seed);
+    let mut accepted = 0usize;
+    let mut caught_at_h2 = 0usize;
+    let mut last_errors = Vec::new();
+
+    for _attempt in 0..attempts {
+        let mut root_seed = [0u8; 32];
+        rng.fill_bytes(&mut root_seed);
+        let tree = SeedTreeV2::build(root_seed, 3).expect("seed tree");
+        let seeds: Vec<PartySeedV2> = tree.leaf_seeds().into_iter().map(PartySeedV2).collect();
+        let mut execution = run_mpc_emulation(circuit, witness, &seeds).expect("honest emulation");
+
+        // Collect every assertion that the false witness breaks. The attack can
+        // only equivocate on Mul outputs; anything else means the gap does not
+        // port to this circuit.
+        let mut patches = Vec::new();
+        let mut patched_muls = std::collections::BTreeSet::new();
+        for (wire, expected) in assertions(circuit) {
+            let reconstructed = execution.shared_trace.reconstruct_wire(wire);
+            if reconstructed == expected {
+                continue;
+            }
+            let mul_idx = mul_output_index(circuit, wire).unwrap_or_else(|| {
+                panic!("false assertion on non-Mul wire {wire}; forgery does not port")
+            });
+            assert!(
+                patched_muls.insert(mul_idx),
+                "duplicate patch for Mul gate {mul_idx}"
+            );
+            patches.push((mul_idx, reconstructed - expected));
+        }
+        assert!(
+            !patches.is_empty(),
+            "the false witness must violate at least one Mul-output assertion"
+        );
+
+        // Party 0 is the sacrificial party. Adjust its claimed Mul shares so
+        // every published assertion row sums to its expected value.
+        for (mul_idx, delta) in patches {
+            execution.views[0].mul_output_shares[mul_idx] -= delta;
+        }
+
+        let party_shares = rebuild_views(circuit, &seeds, &execution);
+        let assert_shares: Vec<Vec<Fr>> = assertions(circuit)
+            .into_iter()
+            .map(|(wire, expected)| {
+                let row: Vec<Fr> = (0..3).map(|party| party_shares[party][wire]).collect();
+                let sum = row.iter().fold(Fr::from(0u64), |acc, share| acc + *share);
+                assert_eq!(sum, expected, "fabricated assertion row must sum correctly");
+                row
+            })
+            .collect();
+
+        let mut randomness = Vec::with_capacity(3);
+        let mut leaves = Vec::with_capacity(3);
+        for party in 0..3 {
+            let mut random = [0u8; 32];
+            rng.fill_bytes(&mut random);
+            let payload = encode_view_payload(
+                &execution.views[party].mul_output_shares,
+                &execution.views[party].residual_input_shares,
+            );
+            leaves.push(commit_view_v2(
+                0,
+                party as u32,
+                &seeds[party].0,
+                &payload,
+                &random,
+            ));
+            randomness.push(random);
+        }
+        let commit_tree = CommitTreeV2::build(&leaves).expect("commitment tree");
+
+        let mut results = Vec::new();
+        let mut accepted_this_attempt = false;
+        for hidden in [0usize, 1, 2] {
+            let repetition = forge_repetition(
+                hidden,
+                &seeds,
+                &tree,
+                &commit_tree,
+                &randomness,
+                &execution.views,
+                assert_shares.clone(),
+            );
+            let proof = V2Proof {
+                version: V2_PROOF_VERSION,
+                params: params.clone(),
+                statement: statement.clone(),
+                context: context(),
+                repetitions: vec![repetition],
+            };
+            let result = verify_statement(&proof, statement, context(), &params);
+            if result.is_ok() {
+                accepted_this_attempt = true;
+                assert_ne!(
+                    hidden, 2,
+                    "the false statement must not survive the h=2 checked-neighbour case"
+                );
+            }
+            results.push((hidden, result));
+        }
+
+        if accepted_this_attempt {
+            accepted += 1;
+        } else {
+            let h2_error = results
+                .iter()
+                .find(|(hidden, _)| *hidden == 2)
+                .and_then(|(_, result)| result.as_ref().err());
+            assert!(
+                matches!(
+                    h2_error,
+                    Some(mpcith_zk::MpcithError::ConsistencyCheckFailed(0))
+                ),
+                "h=2 must catch the fabricated Mul share, got {h2_error:?}"
+            );
+            caught_at_h2 += 1;
+        }
+        last_errors = results
+            .into_iter()
+            .map(|(hidden, result)| format!("h={hidden}: {result:?}"))
+            .collect();
+    }
+
+    (accepted, caught_at_h2, last_errors)
 }
 
 #[test]
@@ -315,5 +474,83 @@ fn known_gap_accepts_false_range_statement_for_two_of_three_hidden_parties() {
     println!(
         "known-gap evidence: {accepted}/{attempts} sampled Fiat-Shamir challenges selected h=0 or h=1 \
          and accepted the false range proof; {caught_at_h2}/{attempts} selected h=2 and were rejected"
+    );
+}
+
+#[test]
+fn known_gap_ports_to_combined_range_and_membership() {
+    // The statement is false: the set is {10,20,30,42} and the range excludes
+    // every member. The witness keeps a valid membership path for x = 30 and
+    // breaks only the range booleanity checks. This is the same hidden-party
+    // / skipped-Mul mechanism as the range-only forgery: the 2/3 gap is
+    // structural, not specific to the range circuit.
+    let tree = MerkleTreeV2::build(&[10u32, 20, 30, 42]).expect("v2 tree");
+    let member = tree.prove_membership(2).expect("membership path for 30");
+    let compiled = compile_combined(100, 200, tree.root(), 4, 2).expect("combined circuit");
+    let circuit = compiled.circuit();
+    let statement = StatementV2::Combined {
+        range: RangeStatementV2::new(100, 200).unwrap(),
+        membership: MembershipStatementV2::new(tree.root(), 4, 2).unwrap(),
+    };
+
+    // Canonical combined layout:
+    // [x, x_bits(32), shifted_bits(7), slack_bits(7),
+    //  index_bits(32), siblings(2), index_slack_bits(2)].
+    let range_bits = 7usize; // bits_needed(200 - 100)
+    let index_bits_count = 2usize; // bits_needed(4 - 1)
+    let mut witness = vec![Fr::from(0u64); circuit.num_inputs()];
+    witness[0] = Fr::from(30u64);
+    for bit in 0..32 {
+        witness[1 + bit] = Fr::from(((30u32 >> bit) & 1) as u64);
+    }
+
+    // shifted = x - 100 = -70 and slack = 100 - shifted = 170. Both
+    // reconstruction equalities hold; only the first booleanity constraint of
+    // each decomposition fails (the values are not 0/1).
+    let shifted_offset = 33;
+    witness[shifted_offset] = -Fr::from(70u64);
+    let slack_offset = shifted_offset + range_bits;
+    witness[slack_offset] = Fr::from(170u64);
+
+    // index = 2, index slack = 4 - 1 - 2 = 1.
+    let index_offset = slack_offset + range_bits;
+    witness[index_offset + 1] = Fr::from(1u64);
+    let sibling_offset = index_offset + 32;
+    for (i, sibling) in member.siblings.iter().enumerate() {
+        witness[sibling_offset + i] = *sibling;
+    }
+    let index_slack_offset = sibling_offset + 2;
+    witness[index_slack_offset] = Fr::from(1u64);
+
+    assert_eq!(
+        index_slack_offset + index_bits_count,
+        circuit.num_inputs(),
+        "test layout must match the canonical combined circuit"
+    );
+    assert!(
+        circuit.evaluate(&witness).is_err(),
+        "test setup requires a witness the circuit rejects"
+    );
+
+    let attempts = 48usize;
+    let (accepted, caught_at_h2, last_errors) =
+        sample_mul_output_forgery(circuit, &statement, &witness, attempts, [0xA5u8; 32]);
+
+    assert!(
+        accepted > 0,
+        "the combined forgery must accept for h=0 or h=1"
+    );
+    assert!(
+        caught_at_h2 > 0,
+        "the combined forgery must be caught when h=2"
+    );
+    assert_eq!(
+        accepted + caught_at_h2,
+        attempts,
+        "every attempt must be either accepted or caught; last: {last_errors:?}"
+    );
+    println!(
+        "combined known-gap evidence: {accepted}/{attempts} sampled challenges accepted the false \
+         range+membership statement; {caught_at_h2}/{attempts} were rejected"
     );
 }
