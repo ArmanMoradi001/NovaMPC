@@ -31,6 +31,7 @@ Prover holds `w`; both sides hold statement, params, context.
 | 5 | P→V | `hB = Hash(JαK[1..dα+1] ∥ Jα′K[…])` (one broadcast round; ΠLigero needs no adaptive hints, so P5's `t`-loop collapses) | P5.4–5 with `t = 1` |
 | 6 | V→P | opening set `I ⊂ [N]`, `\|I\| = ℓ` | P5.6 |
 | 7 | P→V | for opened `I`: all share values + Merkle paths; broadcast shares `S` (`\|S\| = dα+1−ℓ` for `JαK`, `2s−1` for `Jα′K`, disjoint from `I`); DECS responses `Pξ(e_i)`, `i ∈ Sξ`, `\|Sξ\| = dβ+1−ℓ`, `Sξ ∩ I = ∅` | P5.7 |
+| — | — | Refinement (implemented, P4.2): `S`, `S′`, `Sξ` are the deterministic smallest indices not in `I`, recomputed by both sides and never transmitted. Any fixed rule is protocol-equivalent. | — |
 | 8 | V | checks below; accept iff all pass | P5.8 |
 
 Per-repetition proof bytes map 1:1 onto Eq. 16: `ℓ·(n+nh·ρ)` opened shares

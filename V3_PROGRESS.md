@@ -188,4 +188,32 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
   S/S′/Sξ use the deterministic smallest-not-opened rule both sides (sets
   never transmitted; recorded refinement of `V3_PROTOCOL.md` §1 row 7).
 - Validation: e2e + tamper tests pass (see P4.4).
-- Next step: P4.4 tests, measurements, model comparison.
+## P4.4 — tests, measurements, model comparison (`pending hash`)
+
+- Completed: `tests/v3_prototype.rs` — honest accept + codec round-trip,
+  seeded determinism, false-statement prove refusal, wrong
+  statement/context/params rejection, byte-flip sweep + structural share /
+  DECS / root / broadcast-hash tamper rejection. 5 passed (debug).
+- Measured (release, 32-member combined `[1,1000]`, prototype point
+  `N=8192,ℓ=30,s=120,η=6,ρ=1,τ=2`, seeded RNG): **215,034 bytes**,
+  prove ~411 s, verify ~200 s, peak RSS ~57 MB (one-off example, removed
+  after recording). Size is deterministic across runs.
+- Model comparison: Phase-0 model predicts 201,728 B; measured is +6.6%.
+  Investigated, not tuned: the paper's size equation assumes the optimized
+  broadcast reconstruction (`(dα+1)−ℓ−s` + `(d2+1)−ℓ−1` shares via a
+  constrained solve), while this prototype sends the full interpolation
+  sets (`dα+1−ℓ`, `d2+1−ℓ`: +121 Fr/batch = +7.7 KB) for a simpler
+  interpolate-and-hash verifier. Remainder (~5.6 KB) is unmodeled
+  framing: statement/context echo, length prefixes, path side bits,
+  per-leaf randomness, Δu1. The model itself is unchanged (it matches the
+  paper); the implementation delta is documented here. Margin holds:
+  4.65× under 1 MB, 35 KB under the 250 KB design target.
+- Fast-params cross-check (4-member, `N=32,ℓ=3,s=8,η=2,τ=1`): measured
+  41,517 B vs model 40,644 B (+2.1%, same framing causes).
+- Known limitations: single-threaded unoptimized prover/verifier (minute
+  scale at N=8192); optimization gap above recorded as future work, not
+  implemented; combined-only API; ρ>1 and τ>2 paths compile and run but
+  are exercised only at ρ=τ=1 in tests.
+- Validation: `cargo test --lib` full suite green (see gate); V2
+  untouched.
+- Next step: P4 gate record.
