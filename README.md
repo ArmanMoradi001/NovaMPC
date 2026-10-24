@@ -10,14 +10,16 @@ The library proves statements of the form:
 
 > "I know a secret witness `w` such that `Circuit(w) = public_output`"
 
-without revealing `w`. All computations operate over **Z<sub>2<sup>32</sup></sub>**.
+without revealing `w`. The **legacy v1** path computes over
+**Z<sub>2<sup>32</sup></sub>**; the **v2** path uses BN254 `Fr` for its
+circuit, shares, commitments, and membership root.
 
 ### Key Features
 
 - **5 predicate types**: addition, multiplication, XOR, range check, and set membership
 - **Compound predicates**: logical AND composition of sub-predicates
-- **Transaction validation API**: high-level interface for blockchain integration
-- **Configurable prototype soundness**: parameter sets from fast/insecure (M=10) up to high-repetition presets (M=219); repetition counts are prototype soundness estimates, not end-to-end security claims (see Soundness Parameters)
+- **Transaction validation API**: v2 transaction API with a BN254 `Fr` root, a caller-authenticated expected statement, and a 32-byte context hash; v1 remains as deprecated legacy
+- **Configurable prototype soundness**: parameter sets from fast/insecure (M=4 in v2, M=10 in v1) up to the 127-bit-target presets (M=223 at q=1, M=277 at q=2^32); repetition counts are prototype soundness estimates, not end-to-end security claims (see Soundness Parameters)
 - **No trusted setup**: relies only on symmetric-key primitives (BLAKE3, SHA3, MiMC)
 - **Symmetric-key primitives only**: no number-theoretic hardness assumptions, but this prototype makes no end-to-end post-quantum security claim (see Security Considerations)
 
@@ -206,8 +208,9 @@ for the current proof/audit status.
 
 ### Transaction Validation (v1 legacy)
 
-> **Legacy:** v1 uses a 32-bit membership root and is not part of the v2 secure
-> transaction path. Use the v2 API above for new work.
+> **Legacy and deprecated:** v1 uses a 32-bit membership root and is not part of
+> the v2 secure transaction path. Its transaction types and functions carry
+> `#[deprecated]`; use the v2 API above for new work.
 
 ```rust
 use mpcith_zk::merkle::{MerkleTree, MerkleProof};
@@ -280,6 +283,10 @@ whole claim is **not 128-bit**. Bare minima are `M=218` at `q=1` and `M=272` at
 
 ## Benchmarks
 
+The tables in this section are **v1 legacy** measurements. Actual v2
+membership and combined proof measurements are in
+[`V2_BENCHMARKS.md`](V2_BENCHMARKS.md).
+
 Measured on a standard desktop (Rust release profile with LTO):
 
 ### Single Predicate
@@ -311,9 +318,9 @@ Measured on a standard desktop (Rust release profile with LTO):
 | Crate | Purpose |
 |---|---|
 | `blake3` | Commitment scheme, seed tree derivation |
-| `sha3` | Fiat-Shamir challenge derivation |
-| `rand_chacha` | Deterministic per-party CSPRNG |
-| `serde` / `bincode` | Proof serialization |
+| `sha3` | v1 legacy Fiat–Shamir only; not part of the v2 transcript |
+| `rand_chacha` | Deterministic per-party CSPRNG; v2 challenge expansion |
+| `serde` / `bincode` | v1 legacy proof serialization; v2 uses a canonical custom codec |
 | `mimc` (in-tree) | Circuit-friendly Feistel hash for Merkle trees |
 | `criterion` (dev) | Statistical benchmarking |
 
@@ -322,12 +329,12 @@ Measured on a standard desktop (Rust release profile with LTO):
 - **Prototype, not production cryptography**: repetition counts (`M`) are prototype forgery-estimates under the per-repetition MPCitH model. They do not establish end-to-end cryptographic security for this custom protocol, its Fiat-Shamir binding, or its unaudited implementation. Do not deploy these presets on the strength of their bit labels.
 - **V2 security status**: proof format v3 pins a caller-supplied statement and a 32-byte context hash. The conditional `(2/3)^M` soundness argument and its concrete tightness attack are in [`V2_SOUNDNESS_2_3.md`](V2_SOUNDNESS_2_3.md); knowledge soundness and zero knowledge remain unproven. The target is `M=223` at `q=1` or `M=277` at `q=2^32`, capped at ~127 bits by the BN254 `Fr` root. `M=96` is test/benchmark-only. Do not deploy v2 or describe it as production-secure/128-bit before external review and audit.
 - **Audit status**: the review package, code map, side-channel checklist, primitive pins, and known gaps are in [`V2_AUDIT_PACKAGE.md`](V2_AUDIT_PACKAGE.md). Status is `AWAITING AUDIT`; an AI self-review is not an independent audit.
-- **32-bit membership root**: the set-membership Merkle root is a single 32-bit word (≈ 2<sup>16</sup> birthday collision resistance). It must not be relied on for cryptographic strength.
+- **32-bit membership root (v1 only)**: the legacy v1 set-membership Merkle root is a single 32-bit word (≈ 2<sup>16</sup> birthday collision resistance). It must not be relied on for cryptographic strength. The v2 path uses a field-sized root.
 - **No trusted setup**: all parameters are derived from public constants
-- **Symmetric-key building blocks, not a post-quantum security claim**: the protocol uses no number-theoretic assumptions (no discrete log or factoring), so its primitives are not broken by Shor's algorithm — but end-to-end security for this unaudited prototype is *not* established. In particular, the set-membership Merkle root is a single 32-bit word (≈ 2<sup>16</sup> birthday collision resistance), and the repetition-count bit labels are forgery-model estimates only.
+- **Symmetric-key building blocks, not a post-quantum security claim**: the protocol uses no number-theoretic assumptions (no discrete log or factoring), so its primitives are not broken by Shor's algorithm — but end-to-end security for this unaudited prototype is *not* established. In particular, the v1 set-membership Merkle root is a single 32-bit word (≈ 2<sup>16</sup> birthday collision resistance), and the repetition-count bit labels are forgery-model estimates only.
 - **Circuit-substitution protection**: verification is bound to the intended predicate — the safe APIs (`verify_predicate`, `verify_compound`, `verify_transaction_proof`) independently recompile the expected circuit and fail closed if `proof.circuit_hash` does not match; the unchecked generic verifier is crate-private (`pub(crate)`)
-- **Fiat-Shamir**: non-interactive transformation via SHA3-256 hash function
-- **Replay protection**: transaction proofs bind to a `context` field (e.g., block hash) hashed into the Fiat-Shamir transcript
+- **Fiat-Shamir**: v2 uses a BLAKE3-derived transcript and ChaCha20 challenge expansion; v1 uses SHA3-256
+- **Replay protection**: transaction proofs bind to a `context` field (e.g., block hash) hashed into the Fiat–Shamir transcript
 - **Soundness tradeoff**: smaller N gives faster proofs but weaker soundness per repetition; larger M compensates
 
 ## Academic References

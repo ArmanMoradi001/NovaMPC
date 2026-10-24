@@ -3,6 +3,8 @@
 //! These tests exercise the full prove/verify pipeline across all predicate
 //! types and parameter sets, and produce a proof-size / timing table.
 
+#![allow(deprecated)] // v1 transaction API is intentionally exercised as legacy.
+
 use mpcith_zk::circuit::CircuitBuilder;
 use mpcith_zk::fiat_shamir::hash_circuit;
 use mpcith_zk::merkle::MerkleTree;
@@ -73,8 +75,8 @@ fn test_range_and_membership_composition() {
     let x = 42u32;
     let range_pred = Predicate::RangeCheck { lo, hi };
     let r_witness = range_witness(x, lo, hi);
-    let range_proof =
-        prove(range_pred.clone(), &r_witness, &[lo, hi], &params).expect("range prove should succeed");
+    let range_proof = prove(range_pred.clone(), &r_witness, &[lo, hi], &params)
+        .expect("range prove should succeed");
     assert!(
         verify_predicate(&range_pred, &range_proof, &[lo, hi], &params).unwrap(),
         "range verify should pass"
@@ -88,8 +90,8 @@ fn test_range_and_membership_composition() {
     let merkle_proof = tree.prove_membership(leaf_idx);
     let m_witness = membership_witness(&merkle_proof);
     let mem_pred = Predicate::SetMembership { members };
-    let mem_proof =
-        prove(mem_pred.clone(), &m_witness, &[root], &params).expect("membership prove should succeed");
+    let mem_proof = prove(mem_pred.clone(), &m_witness, &[root], &params)
+        .expect("membership prove should succeed");
     assert!(
         verify_predicate(&mem_pred, &mem_proof, &[root], &params).unwrap(),
         "membership verify should pass"
@@ -369,7 +371,8 @@ fn test_tampered_intermediate_wire_rejected() {
         .iter_mut()
         .flat_map(|rep| rep.opened_views.iter_mut())
         .find(|opened| {
-            opened.view.party_idx == num_parties - 1 && !opened.view.residual_input_shares.is_empty()
+            opened.view.party_idx == num_parties - 1
+                && !opened.view.residual_input_shares.is_empty()
         })
         .expect("proof must contain at least one opened residual-party view");
     target.view.residual_input_shares[0] ^= 0xFF;
@@ -587,7 +590,9 @@ fn test_h2_proof_for_p_cannot_be_substituted_as_q() {
     );
 
     // Different predicate family entirely.
-    let q2 = Predicate::MultiplicationCheck { expected_product: 12 };
+    let q2 = Predicate::MultiplicationCheck {
+        expected_product: 12,
+    };
     assert!(verify_predicate(&q2, &proof_p, &[12], &params).is_err());
 
     // Compound Q is also out of reach for a simple-P proof.

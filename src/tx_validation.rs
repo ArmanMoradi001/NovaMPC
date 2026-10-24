@@ -14,6 +14,8 @@
 //! for block N cannot be replayed at block N+1 — the verifier would hash a
 //! different context, derive different challenges, and reject the proof.
 
+#![allow(deprecated)] // the deprecated v1 API is implemented and tested here.
+
 use sha3::{Digest, Sha3_256};
 
 use crate::fiat_shamir::hash_circuit;
@@ -37,6 +39,7 @@ use crate::{MpcithError, Result};
 /// is the true length of the set the root was built from; it is baked into
 /// the circuit's index-bound constraint (`leaf_index < num_members`), so a
 /// wrong count compiles a different circuit and fails closed.
+#[deprecated(note = "v1 uses a 32-bit set-membership root; use v2::transaction")]
 #[derive(Debug, Clone)]
 pub struct TransactionStatement {
     /// The authorized transfer range `(lo, hi)` inclusive.
@@ -68,6 +71,7 @@ pub struct TransactionStatement {
 /// half of the compound witness. It must be a valid authentication path for
 /// `secret_value` under the statement's root (see
 /// [`create_transaction_proof`] for the exact checks).
+#[deprecated(note = "v1 uses a 32-bit set-membership root; use v2::transaction")]
 #[derive(Debug, Clone)]
 pub struct TransactionWitness {
     /// The actual private transfer amount or asset ID.
@@ -186,6 +190,7 @@ fn validate_membership_params(num_members: usize, depth: usize) -> Result<()> {
 ///   secret value or the statement (wrong leaf, root, index, or path).
 /// - Returns `Err` if the secret value is outside the authorized range or
 ///   otherwise does not satisfy the circuit.
+#[deprecated(note = "v1 uses a 32-bit set-membership root; use v2::transaction")]
 pub fn create_transaction_proof(
     statement: &TransactionStatement,
     witness: &TransactionWitness,
@@ -281,6 +286,7 @@ pub fn create_transaction_proof(
 ///
 /// Empty sets and inconsistent `(depth, num_members)` pairs are rejected
 /// before recompiling, so malformed statements fail fast.
+#[deprecated(note = "v1 uses a 32-bit set-membership root; use v2::transaction")]
 pub fn verify_transaction_proof(
     proof: &Proof,
     statement: &TransactionStatement,
@@ -324,6 +330,8 @@ pub fn verify_transaction_proof(
 
 #[cfg(test)]
 mod tests {
+    #![allow(deprecated)]
+
     use super::*;
     use crate::merkle::MerkleTree;
     use crate::params::ProofParams;
@@ -482,13 +490,19 @@ mod tests {
         bad.merkle_proof.root ^= 1;
 
         let result = create_transaction_proof(&statement, &bad, &params);
-        assert!(result.is_err(), "proof root != statement root must be rejected");
+        assert!(
+            result.is_err(),
+            "proof root != statement root must be rejected"
+        );
 
         // Same, but with the statement root corrupted instead.
         let mut bad_statement = statement.clone();
         bad_statement.authorized_set_root ^= 1;
         let result = create_transaction_proof(&bad_statement, &witness, &params);
-        assert!(result.is_err(), "statement root != proof root must be rejected");
+        assert!(
+            result.is_err(),
+            "statement root != proof root must be rejected"
+        );
     }
 
     #[test]
@@ -607,9 +621,8 @@ mod tests {
         ];
 
         for params in &bad_params {
-            let result = std::panic::catch_unwind(|| {
-                create_transaction_proof(&statement, &witness, params)
-            });
+            let result =
+                std::panic::catch_unwind(|| create_transaction_proof(&statement, &witness, params));
             match result {
                 Err(_) => panic!(
                     "create_transaction_proof panicked for N={} M={}",
@@ -767,7 +780,10 @@ mod tests {
         forged_witness.secret_value = 43;
         if let Ok(proof) = create_transaction_proof(&statement, &forged_witness, &params) {
             assert!(
-                !matches!(verify_transaction_proof(&proof, &statement, &params), Ok(true)),
+                !matches!(
+                    verify_transaction_proof(&proof, &statement, &params),
+                    Ok(true)
+                ),
                 "forged single-member proof must not verify"
             );
         }

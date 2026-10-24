@@ -17,6 +17,8 @@ The v1 modules, public types, serialized proofs, and 32-bit MiMC set roots are
 not reinterpreted. V2 lives under `src/v2/` (or an equivalently explicit
 versioned namespace) and uses its own proof/version identifiers. A v1 proof is
 never accepted as v2, and a v1 root is never silently treated as a v2 root.
+The v1 transaction types and functions are marked `#[deprecated]`; they remain
+available only as a research baseline.
 
 Migration is not a byte conversion: the old 32-bit root cannot be widened into
 a field root without the original member list. Authorized sets must be rebuilt

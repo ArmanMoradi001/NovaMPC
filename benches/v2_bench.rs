@@ -17,6 +17,8 @@
 //! alongside medians. It measures the actual public API, including canonical
 //! proof serialization.
 
+#![allow(deprecated)] // the v1 reference row is intentionally legacy.
+
 use std::time::{Duration, Instant};
 
 use ark_bn254::Fr;

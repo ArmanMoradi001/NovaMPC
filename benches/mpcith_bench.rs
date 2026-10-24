@@ -2,6 +2,8 @@
 //!
 //! Run with: cargo bench
 
+#![allow(deprecated)] // v1 transaction comparison is intentionally legacy.
+
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use mpcith_zk::merkle::MerkleTree;
 use mpcith_zk::{
@@ -17,21 +19,17 @@ fn bench_prove(c: &mut Criterion) {
         ("low_n3_m64", ProofParams::low_n()),
         ("balanced_n3_m96", ProofParams::balanced()),
     ] {
-        group.bench_with_input(
-            BenchmarkId::new("addition", label),
-            &params,
-            |b, params| {
-                b.iter(|| {
-                    prove(
-                        black_box(Predicate::AdditionCheck { expected_sum: 7 }),
-                        black_box(&[3u32, 4u32]),
-                        black_box(&[7u32]),
-                        params,
-                    )
-                    .unwrap()
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("addition", label), &params, |b, params| {
+            b.iter(|| {
+                prove(
+                    black_box(Predicate::AdditionCheck { expected_sum: 7 }),
+                    black_box(&[3u32, 4u32]),
+                    black_box(&[7u32]),
+                    params,
+                )
+                .unwrap()
+            });
+        });
     }
 
     group.finish();
@@ -58,8 +56,13 @@ fn bench_verify(c: &mut Criterion) {
             &(proof, params.clone()),
             |b, (proof, params)| {
                 b.iter(|| {
-                    verify_predicate(black_box(&pred), black_box(proof), black_box(&[7u32]), params)
-                        .unwrap()
+                    verify_predicate(
+                        black_box(&pred),
+                        black_box(proof),
+                        black_box(&[7u32]),
+                        params,
+                    )
+                    .unwrap()
                 });
             },
         );
@@ -233,8 +236,13 @@ fn bench_compound_predicate(c: &mut Criterion) {
 
     group.bench_function("verify", |b| {
         b.iter(|| {
-            verify_compound(black_box(&compound), black_box(&proof), black_box(&public_inputs), &params)
-                .unwrap();
+            verify_compound(
+                black_box(&compound),
+                black_box(&proof),
+                black_box(&public_inputs),
+                &params,
+            )
+            .unwrap();
         });
     });
 
@@ -379,12 +387,7 @@ fn bench_by_param_set(c: &mut Criterion) {
 
         println!(
             "{:<30} | {:<18} | {:>9.2}ms | {:>9.2}ms | {:>9.2}KB | {:>15.1}",
-            "RangeCheck ∧ SetMembership",
-            param_label,
-            prove_ms,
-            verify_ms,
-            proof_kb,
-            soundness
+            "RangeCheck ∧ SetMembership", param_label, prove_ms, verify_ms, proof_kb, soundness
         );
     }
 
