@@ -95,15 +95,15 @@ The agent must update this table at the end of every step. Keep the commit hash 
 
 | Step | Fixes covered | Status | Last commit | Notes |
 |---|---|---|---|---|
-| 00 | Roadmap/baseline | DONE | `65d3153` | Baseline recorded; roadmap added in this commit |
+| 00 | Roadmap/baseline | DONE | `1ec526f` | Roadmap added; baseline recorded |
 | 01 | Fix 3, Fix 4 | DONE | `351222e` | Context + mandatory statement pinning; proof v3 |
 | 02 | Fix 1, Fix 2 | DONE | `d8840e3` | v2 transaction API + caller-supplied statement |
 | 03 | Fix 5 | BLOCKED-REVIEW | `8fbffe4` | 2/3 dossier written; awaiting named external reviewer |
 | 04 | Fix 6 | DONE | `0fcd1e1` | M = 218/272 minima and 223/277 presets |
 | 05 | Fix 7 | BLOCKED-AUDIT | `2965cd5` | Audit package written; awaiting independent audit |
-| 06 | Fix 8 | IN PROGRESS | — | Adversarial and serialization tests; high-M evidence |
-| 07 | Fix 1/2 support | TODO | — | Deprecate v1, docs, claim matrix |
-| 08 | All | TODO | — | Final verification |
+| 06 | Fix 8 | DONE | `459e1da` | Adversarial, serialization, combined gap, high-M evidence |
+| 07 | Fix 1/2 support | DONE | `27504e0` | v1 deprecated; v2 docs and claim-matrix groundwork |
+| 08 | All | DONE | this commit | Final verification, claim matrix, static checks |
 
 ### Baseline and evidence notes
 
@@ -114,6 +114,27 @@ The agent must update this table at the end of every step. Keep the commit hash 
   plus combined-circuit port), and the ignored high-M release run
   (`M=223`: 2,279,379 bytes / 114 ms prove / 43 ms verify; `M=277`:
   2,853,947 bytes / 127 ms prove / 53 ms verify).
+- Step 07 evidence: v1 transaction types/functions carry `#[deprecated]`; v1
+  examples are labeled legacy; README, GUIDE, `V2_DESIGN.md`, and
+  `integration.md` point at the v2 transaction API, context hash, safe
+  verifiers, and `secure_127` presets. `tests/v2_docs.rs` checks the text.
+- Step 08 evidence: `cargo fmt --check` passes. `cargo clippy --all-targets`
+  exits 0 with 60 pre-existing style warnings and no errors. Test targets:
+  99 v2 library tests (266 total library), 21 v1 integration, 6 v2 integration,
+  8 adversarial, 2 soundness-gap, 5 transaction, 1 parameter arithmetic, and
+  5 documentation tests, all passing; the 2 high-M tests are ignored by default
+  and passed in release mode. `cargo test --tests` exits 0 and `cargo test
+  --doc` reports 0 doctests. `timeout 1800 cargo test --all-targets` was run:
+  every test target passed, but the command hit the 30-minute cap inside the
+  custom `benches/v2_bench.rs` harness (a benchmark, not a test target), so it
+  exited 124 before finishing that harness. The benchmark target was therefore
+  not run to completion in test mode; this is recorded as an omission rather
+  than a green all-targets run.
+- Static checks at Step 08: no `pub fn verify(` or `pub fn verify_bytes(` in
+  `src/v2/proof.rs`, no `TODO`/`todo!`/`unimplemented!` in `src/v2`, and the
+  only `authorized_set_root: u32` is the deprecated v1 transaction struct. All
+  `128-bit`/`production-secure` documentation hits are explicit non-claims or
+  ceiling statements.
 - Steps 03 and 05 are **not** DONE: no named external reviewer or auditor has
   signed off. Do not mark them DONE on self-review.
 

@@ -4,8 +4,10 @@
 **Review status:** `DRAFT / AWAITING EXTERNAL REVIEW` for the 2/3 soundness
 argument; `AWAITING AUDIT` for knowledge soundness, zero knowledge, side
 channels, and primitive assumptions.  
-**Code baseline:** v2 proof format version 3 after `[STEP-02]` (commit
-`d8840e3`).  
+**Code baseline:** v2 proof format version 3; re-verified at the final Step 08
+baseline (see `git log --grep='\[STEP-08\]'`). The proof/audit gates remain
+open.
+
 **Companion dossier:** [`V2_SOUNDNESS_2_3.md`](V2_SOUNDNESS_2_3.md).
 
 This document is not a machine-checked proof, an independent audit, or a

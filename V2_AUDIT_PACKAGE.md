@@ -4,7 +4,8 @@
 **Proof status:** 2/3 soundness dossier is `DRAFT / AWAITING EXTERNAL REVIEW`;
 knowledge soundness, zero knowledge, side channels, and primitive assumptions
 are unresolved.  
-**Code baseline:** proof format v3; Step 06 adversarial/high-M suite.  
+**Code baseline:** proof format v3; final Step 08 verification baseline.
+
 **Companion documents:** [`V2_SOUNDNESS_2_3.md`](V2_SOUNDNESS_2_3.md),
 [`V2_SECURITY_ANALYSIS.md`](V2_SECURITY_ANALYSIS.md).
 
@@ -222,22 +223,29 @@ proof with a v2 proof; the magic and version checks are tested.
 ### 7.1 Commands run before audit preparation
 
 ```text
-cargo test --lib v2:: -- --test-threads=1
-cargo test --test v2_integration --test v2_soundness_gap --test v2_transaction --test v2_parameter_arithmetic -- --test-threads=1
-cargo test --test v2_adversarial --test v2_transaction --test v2_integration --test v2_soundness_gap -- --test-threads=1
+cargo fmt --check
 cargo clippy --all-targets
+cargo test --lib v2:: -- --test-threads=1
+cargo test --test v2_integration --test v2_soundness_gap --test v2_adversarial \
+  --test v2_transaction --test v2_docs --test v2_parameter_arithmetic -- --test-threads=1
+cargo test --release --test v2_high_m -- --ignored --nocapture
+cargo test --tests
+timeout 1800 cargo test --all-targets
 ```
 
-Observed after Step 06:
+Observed at final Step 08 verification:
 
-- 99 v2 library tests passed.
+- 99 v2 library tests passed (266 library tests total).
+- 21 v1 integration tests passed (legacy API exercised intentionally).
 - 6 v2 integration tests passed.
 - 2 soundness-gap tests passed: the range forgery and the combined-circuit port.
 - 1 parameter-arithmetic test passed.
 - 5 transaction tests passed.
 - 8 adversarial tests passed.
-- Clippy reports style warnings in v1/v2 (manual `is_multiple_of`, loop-index
-  lints, and a few simplifications); no errors. These are not security findings.
+- 5 documentation consistency tests passed.
+- Clippy exits 0 with 60 style warnings in v1/v2 (manual `is_multiple_of`,
+  loop-index lints, and a few simplifications); no errors. These are not
+  security findings.
 
 ### 7.2 High-M evidence
 
@@ -269,10 +277,14 @@ known protocol gap, not a fixed regression.
 
 ### 7.4 Full-suite status
 
-`cargo test --all-targets` is known to be slow in this repository. At the time
-of this package the v2-specific suites above are green; a full all-targets run
-must be recorded in Step 08, or the omitted suites listed explicitly. Do not
-claim a full green run without evidence.
+`cargo test --all-targets` was run under `timeout 1800` at Step 08. Every test
+target passed, but the command reached the 30-minute cap while executing the
+custom benchmark harness `benches/v2_bench.rs` and exited 124. That harness is
+a benchmark, not a test target; it was not run to completion in test mode. To
+record the test-target result without the benchmark, `cargo test --tests` was
+run separately and exited 0 with all suites green. `cargo test --doc` reports 0
+doctests. Do not describe this as a completed all-targets run; the only omitted
+target is the benchmark harness execution.
 
 ---
 

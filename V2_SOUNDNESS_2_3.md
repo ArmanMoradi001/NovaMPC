@@ -2,7 +2,9 @@
 
 **Status:** `DRAFT / AWAITING EXTERNAL REVIEW`  
 **Scope:** v2 proof format version 3, BN254 `Fr`, `N = 3`, the implemented 2-of-3 opening schedule.  
-**Code baseline:** commit `d8840e3` (`[STEP-02] Add v2 transaction API with Fr root and context`), plus the Step 03 documentation and arithmetic-test changes.
+**Code baseline:** v2 proof format version 3; dossier at commit `8fbffe4`
+(`[STEP-03]`) with the combined-gap evidence added in `15c598a` (`[STEP-06]`),
+re-verified at the final Step 08 baseline.
 
 This document is a proof draft and an explicit gap report. It is not a
 machine-checked proof, an independent review, or an audit. It does not claim

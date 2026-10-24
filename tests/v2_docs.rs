@@ -45,3 +45,16 @@ fn readme_does_not_show_the_raw_v2_verifier_as_public_api() {
         );
     }
 }
+
+#[test]
+fn readme_claim_matrix_keeps_the_open_gates_and_non_claims() {
+    assert!(README.contains("## Claim matrix"));
+    assert!(README.contains(
+        "| 2/3 per-repetition soundness bound and extraction | draft / awaiting external review |"
+    ));
+    assert!(README.contains("| Knowledge soundness | **not claimed** until reviewed |"));
+    assert!(README.contains("| Zero knowledge | **not claimed** until reviewed |"));
+    assert!(README.contains("| Side-channel resistance | **not claimed** until audited |"));
+    assert!(README.contains("| 128-bit end-to-end security | **not claimed** |"));
+    assert!(README.contains("| Production deployment | **not claimed** |"));
+}

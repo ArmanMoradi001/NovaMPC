@@ -281,6 +281,25 @@ whole claim is **not 128-bit**. Bare minima are `M=218` at `q=1` and `M=272` at
 
 \* Prototype soundness is computed as `M × log₂(N / (N-1))` forgery-estimate bits (per-repetition error `(N-1)/N`, i.e. 2/3 at N=3 for the 2-of-3 ZKBoo opening). These repetition counts do **not** establish end-to-end cryptographic security for the custom protocol or its implementation — see Security Considerations. Proof sizes are `ProofParams::estimated_proof_bytes` upper bounds for `AdditionCheck` (measured proofs land within one residual-share block per repetition below them; e.g. ≈ 4.5 KB measured at `fast_insecure`).
 
+## Claim matrix
+
+This is the complete set of claims the current code and evidence support. The
+2/3 argument is a draft awaiting named external review; the audit gate is still
+open. Do not upgrade any row on the strength of the test suite alone.
+
+| Claim | Status |
+|---|---|
+| v2 root is BN254 `Fr`, ~127-bit generic collision ceiling | implemented/tested |
+| Transaction API uses `Fr` root + member count/depth + context | implemented/tested |
+| Expected statement pinning is mandatory | implemented/tested |
+| Root is caller-authenticated, never proof-supplied | implemented/tested (API shape) |
+| 2/3 per-repetition soundness bound and extraction | draft / awaiting external review |
+| Knowledge soundness | **not claimed** until reviewed |
+| Zero knowledge | **not claimed** until reviewed |
+| Side-channel resistance | **not claimed** until audited |
+| 128-bit end-to-end security | **not claimed** |
+| Production deployment | **not claimed** |
+
 ## Benchmarks
 
 The tables in this section are **v1 legacy** measurements. Actual v2
