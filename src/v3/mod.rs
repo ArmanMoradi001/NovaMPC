@@ -8,5 +8,6 @@
 //! validation, packed witness-matrix layout, Shamir sharing, Merkle
 //! commitment/opening support, and the degree-enforcing round.
 
+pub mod matrix;
 pub mod params;
 pub mod suite;
