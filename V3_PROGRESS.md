@@ -115,3 +115,18 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
   constraint-neutral (`0 = 0·0`). Recorded in the `constraints.rs` header.
 - Validation: no code change; `cargo test --lib v3::constraints` re-run below.
 - Next step: P3.2 DECS helper audit against the paper's protocol messages.
+## P3.2 — DECS helper audit against FR25b's protocol
+
+- Re-read FR25b §4.2 (Theorem 1), §5 (Eqs. 12–14, `Q` alignment, mask `JuK`),
+  and Protocol 5 (steps 1–1b, 7–8) against `src/v3/decs.rs`.
+- Findings recorded in the `decs.rs` header: (a) the paper's verifier check
+  is hash-equality of reconstructed `Pξ` against pre-committed `h1'`, not a
+  degree test on the interpolant (vacuous at `dβ+1` points) — the P3.0 `d+2`
+  requirement is a stricter harness check, not the protocol equation;
+  (b) challenge timing is `h1 → Γ → h1'` before MPC randomness and `I`;
+  (c) `|S| = dβ+1−ℓ`, `S ∩ I = ∅`; (d) Phase 3 must add `X`-shift alignment,
+  mask sharing, and `h1'`; (e) the model's `(dβ+1)·η` term matches the
+  paper's transcript list (`S`-responses + opened mask shares). No helper
+  logic changed.
+- Validation: `cargo test --lib v3::decs` re-run below.
+- Next step: P3.3 exact interactive protocol specification.

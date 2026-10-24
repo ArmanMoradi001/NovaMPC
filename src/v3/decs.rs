@@ -1,18 +1,33 @@
-//! Degree-enforcing round (FR25b §4.2, Theorem 1).
+//! Degree-enforcing round (FR25b §4.2, §5, Protocol 5 steps 1–1b, 7–8).
 //!
-//! After committing the share rows, the verifier samples a random matrix
-//! `Γ ∈ F^{η×n}` and the prover answers the η linear combinations
-//! `R_k = Σ_i γ_{k,i}·P_i` of the committed row polynomials. The verifier
-//! reconstructs each `R_k` from opened evaluations and checks `deg R_k ≤ d`
-//! (here `d = d_β`, the maximum hint degree). A committed tuple containing a
-//! polynomial of degree `> d` passes one round with probability at most
-//! `1/|F|` per combination (union-bound over `C(N, d+2)` evaluation sets gives
-//! the `C(N,d+2)/|F|^η` term of Theorem 2 — derived in Phase 0, not
-//! re-proven here).
+//! Paper protocol (TCitH-MT): after the prover commits all sharings
+//! (`JwK`, mask `JuK`, hints) under Merkle root `h1`, the verifier samples
+//! `Γ ∈ F^{η×|Q|}` where `Q` is the degree-aligned concatenation of every
+//! committed polynomial (Eq. 13: each shifted by `X^{dβ−deg}` to degree
+//! `dβ`, plus mask `Pu`). The prover answers `Pξ = Γ·Q + Pu` (Eq. 14) with
+//! `h1' = Hash(Pξ)` — BEFORE seeing MPC randomness or the opening set `I`.
+//! At opening the prover reveals `Pξ(e_i)` for `i ∈ S`, `|S| = dβ+1−ℓ`,
+//! `S ∩ I = ∅`; the verifier recomputes `Pξ(e_i)` for `i ∈ I` from opened
+//! shares, interpolates over `S ∪ I` (`dβ+1` points), and checks
+//! hash-equality against `h1'`. Detection comes from that hash binding
+//! (Theorem 1: `C(N,dβ+2)/|F|^η`), NOT from a degree test on the
+//! interpolant — any `dβ+1` values interpolate to degree `≤ dβ`, so such a
+//! test would be vacuous at the protocol's point count.
 //!
-//! This module owns the checkable unit: combination, degree test, response
-//! evaluation, and verification from opened evaluations. Challenge sampling
+//! The helpers below implement the checkable unit used by tests:
+//! combination, response evaluation, and verification from opened
+//! evaluations. `verify_responses` additionally enforces a `d+2`-point
+//! degree check, which is a STRICTER-THAN-PROTOCOL harness check (the P3.0
+//! fix): it catches inconsistent high-degree responses with fewer moving
+//! parts, but it is not the paper's verifier equation. The Phase-3 prover
+//! must implement `h1'` pre-commitment plus reconstruction-equality, the
+//! `X`-shift alignment, and the mask sharing `JuK`. Challenge sampling
 //! (`Γ`) moves to the transcript in Phase 3.
+//!
+//! Size accounting (Phase-0 model, Eq. 16): the DECS term
+//! `(dβ+1)·η·log|F|` is `(dβ+1−ℓ)·η` S-response elements plus `ℓ·η` opened
+//! mask shares per repetition — exactly the messages above. Verified
+//! against the Protocol 5 transcript list, not just the helper.
 
 use ark_bn254::Fr;
 use ark_ff::Zero;
