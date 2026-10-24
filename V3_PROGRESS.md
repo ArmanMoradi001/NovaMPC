@@ -9,10 +9,17 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
   (published-reference-τ1, prototype-τ2, fast-insecure-test); derived degrees
   `d_β = s+ℓ−1`, `d_α = 2(s+ℓ−1)` tested against Phase 0 values.
 - Validation: `cargo test --lib v3::` — 4 passed.
-## P1.2 — packed witness-matrix layout (`pending hash`)
+## P1.2 — packed witness-matrix layout (`cf14f7d`)
 
 - Completed: `src/v3/matrix.rs` (`MatrixDims`, `pack_witness`, `unpack_matrix`);
   dims verified against Phase 0 model (`n=46` at `s=120`, `n=41` at `s=133`
   for `3·1774+95`); zero-padding and shape-rejection tests.
 - Validation: `cargo test --lib v3::` — 7 passed.
 - Next step: P1.3 packed Shamir sharing (`sharing.rs`).
+## P1.3 — packed Shamir sharing (`pending hash`)
+
+- Completed: `src/v3/sharing.rs` — fixed points (`ω_k=k`, `e_i=s+i`),
+  `P = I_v + F·R` sharing, Lagrange `reconstruct` (needs `s+ℓ` shares),
+  coefficient interpolation + `degree_within_bound`; tamper/input tests.
+- Validation: `cargo test --lib v3::` — 11 passed.
+- Next step: P1.4 Merkle commitment/opening support (`commit.rs`).

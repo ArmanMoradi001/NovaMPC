@@ -10,4 +10,5 @@
 
 pub mod matrix;
 pub mod params;
+pub mod sharing;
 pub mod suite;
