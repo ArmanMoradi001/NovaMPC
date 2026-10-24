@@ -16,10 +16,17 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
   for `3·1774+95`); zero-padding and shape-rejection tests.
 - Validation: `cargo test --lib v3::` — 7 passed.
 - Next step: P1.3 packed Shamir sharing (`sharing.rs`).
-## P1.3 — packed Shamir sharing (`pending hash`)
+## P1.3 — packed Shamir sharing (`bc6848a`)
 
 - Completed: `src/v3/sharing.rs` — fixed points (`ω_k=k`, `e_i=s+i`),
   `P = I_v + F·R` sharing, Lagrange `reconstruct` (needs `s+ℓ` shares),
   coefficient interpolation + `degree_within_bound`; tamper/input tests.
 - Validation: `cargo test --lib v3::` — 11 passed.
 - Next step: P1.4 Merkle commitment/opening support (`commit.rs`).
+## P1.4 — Merkle commitment/opening (`pending hash`)
+
+- Completed: `src/v3/commit.rs` — domain-separated BLAKE3 leaf/internal
+  commits (canonical `Fr` encoding reused from v2), root/path/verify with
+  odd-layer duplication; tamper and input tests.
+- Validation: `cargo test --lib v3::` — 15 passed.
+- Next step: P1.5 degree-enforcing round (`decs.rs`).
