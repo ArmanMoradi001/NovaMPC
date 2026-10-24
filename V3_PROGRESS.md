@@ -101,3 +101,17 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
   (two existing expensive tests remain ignored).
 - Phase 3 remains gated on the promised independent FR25b row/order and
   Fiat–Shamir/QROM analysis. No security claim is made.
+
+## P3.1 — ΠLigero vector/row ordering audit (independent re-check)
+
+- Re-read FR25b §6.3 (packs, column tuples `w^(k)`, Protocol 8) and §6.4
+  (`w = a||b||c`, `|w| = 3|C|`, one quadratic `f = c−a·b` per lane,
+  `m2 = 2|C|+|y|`, footnote-12 input handling) against `constraints.rs`.
+- Finding: no mismatch requiring a fix. Our per-group `(a,b,c)` rows are a
+  permutation of the paper's `a||b||c` packing — same relation family with
+  permuted `A` columns, hence a valid LPPC instance of the analyzed form.
+  Appended inputs use the paper's allowed (non-optimized) form and are
+  counted in the size model; zero padding in the short final group is
+  constraint-neutral (`0 = 0·0`). Recorded in the `constraints.rs` header.
+- Validation: no code change; `cargo test --lib v3::constraints` re-run below.
+- Next step: P3.2 DECS helper audit against the paper's protocol messages.

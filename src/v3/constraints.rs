@@ -6,6 +6,23 @@
 //! `c - a*b = 0`; global linear constraints bind `a` and `b` to the circuit's
 //! affine wire expressions and enforce every `AssertEq`.
 //!
+//! Ordering audit (P3.1, against FR25b §6.3–6.4): the paper defines the
+//! witness as the concatenation `w = a || b || c` (`|w| = 3|C|`) arranged
+//! row-wise into packs of `s`, with one quadratic polynomial `f = c - a·b`
+//! applied per pack-slot lane and `m2 = 2|C| + |y|` global linear constraints
+//! (`a = A1·w`, `b = A2·w`, `y = A3·w`). This compiler lays each `s`-gate
+//! group out as consecutive `(a, b, c)` rows instead of `a || b || c` blocks
+//! and appends the private inputs in trailing packs. That is a pure
+//! permutation of the packed witness: the same relation family (one quadratic
+//! check per occupied lane, `2M` operand-binding plus `#AssertEq` output
+//! equations) with permuted `A`-matrix columns, so it is a valid LPPC
+//! instance of exactly the analyzed form — no paper change needed, and none
+//! was made. Two deliberate deviations from the paper's minimal sketch are
+//! pinned by tests: (a) inputs are committed inside `w` (the paper's
+//! footnote-12 input-free optimization is optional; the size model counts our
+//! `|w|`), and (b) a short final group is zero-padded, whose lanes satisfy
+//! `0 = 0·0` without constraining any real gate.
+//!
 //! This is a relation compiler only. It does not implement the MPC protocol,
 //! randomized aggregation, or a proof/verifier.
 
