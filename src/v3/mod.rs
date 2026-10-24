@@ -11,9 +11,11 @@
 pub mod commit;
 pub mod constraints;
 pub mod decs;
+pub mod hints;
 pub mod matrix;
 pub mod params;
 pub mod proof;
+pub mod prover;
 pub mod sharing;
 pub mod suite;
 pub mod transcript;

@@ -164,4 +164,18 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
   (typed `V3Proof`, canonical codec with magic/version/canonical-Fr/caps/no
   trailing bytes, V2-magic rejection).
 - Validation: `cargo test --lib v3::` — 30 passed.
-- Next step: P4.2 prover (hints + commitments + responses).
+## P4.2 — prover: hints, commitments, responses (`pending hash`)
+
+- Completed: `src/v3/sharing.rs` += `random_poly`/`eval_poly_all`/
+  `random_poly_shares`; new `src/v3/hints.rs` (Π$/Π0/ΠΣ0 derivation,
+  Lemma-1 parameters, Δu1 correction; 3 tests); new `src/v3/prover.rs`
+  (`prove_combined_v3`, combined-only): packed/mask/hint sharing, Merkle
+  leaves, Γ challenge, Pξ + h1', per-batch γ/γ' batching, canonical+S
+  broadcasts, deterministic S/S′/Sξ complements, canonical `V3Proof`
+  encoding.
+- DECS alignment follows the paper's stated word-rule (`X^{dβ−deg}`,
+  zero shift for full-degree columns); the printed Eq. 13 exponent would
+  misalign packed columns and is not used (recorded in `prover.rs`).
+- Validation: e2e honest-path verified (see P4.4); `cargo test --lib v3::`
+  green.
+- Next step: P4.3 verifier checks.

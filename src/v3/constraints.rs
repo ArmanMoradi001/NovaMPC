@@ -294,6 +294,32 @@ impl ConstraintProgramV3 {
         self.linear_constraints.len()
     }
 
+    /// Per-constraint, per-nonzero-pack interpolation polynomials `JA_j(p)`
+    /// (degree ≤ `s−1`) for the inner-product evaluation
+    /// `Jb_j = ⟨JA_j, Jw⟩` (FR25b §6.3): pack `p`'s polynomial interpolates
+    /// that constraint's lane coefficients (zero at unused lanes).
+    pub fn linear_pack_polys(&self) -> Result<Vec<Vec<(usize, Vec<Fr>)>>> {
+        use crate::v3::sharing::{coord_point, interpolate_coeffs};
+        let s = self.dims.num_cols;
+        let omega: Vec<Fr> = (0..s).map(coord_point).collect();
+        self.linear_constraints
+            .iter()
+            .map(|constraint| {
+                let mut by_pack: BTreeMap<usize, Vec<Fr>> = BTreeMap::new();
+                for (index, coefficient) in &constraint.terms {
+                    by_pack.entry(index / s).or_insert_with(|| vec![Fr::from(0u64); s])[index % s] +=
+                        *coefficient;
+                }
+                by_pack
+                    .into_iter()
+                    .map(|(pack, lane_values)| {
+                        interpolate_coeffs(&omega, &lane_values).map(|poly| (pack, poly))
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
     /// Build the extended witness matrix for any private input vector.
     /// Assertions are intentionally not checked here, so invalid inputs can be
     /// used in differential tests.
@@ -543,6 +569,34 @@ mod tests {
             ),
             (43, 133)
         );
+    }
+
+    #[test]
+    fn linear_pack_polys_evaluate_to_lane_coefficients() {
+        use crate::v3::sharing::{coord_point, eval_poly};
+        let mut builder = crate::v2::circuit::CircuitBuilderV2::new(2);
+        let sum = builder.add(Wire(0), Wire(1));
+        let product = builder.mul(sum, Wire(1));
+        let shifted = builder.add_const(product, Fr::from(3u64));
+        builder.assert_eq(shifted, Fr::from(11u64));
+        let circuit = builder.build();
+        let program =
+            ConstraintProgramV3::compile(&circuit, &V3Params::fast_insecure_test()).unwrap();
+        let pack_polys = program.linear_pack_polys().unwrap();
+        assert_eq!(pack_polys.len(), program.m2());
+        for (constraint, polys) in program.linear_constraints().iter().zip(pack_polys.iter()) {
+            for (pack, poly) in polys {
+                for lane in 0..program.dims().num_cols {
+                    let expected = constraint
+                        .terms
+                        .iter()
+                        .find(|(index, _)| *index / program.dims().num_cols == *pack && *index % program.dims().num_cols == lane)
+                        .map(|(_, c)| *c)
+                        .unwrap_or(Fr::from(0u64));
+                    assert_eq!(eval_poly(poly, coord_point(lane)), expected);
+                }
+            }
+        }
     }
 
     #[test]

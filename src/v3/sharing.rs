@@ -11,7 +11,8 @@
 //! collision does not arise.
 
 use ark_bn254::Fr;
-use ark_ff::{Field, One, Zero};
+use ark_ff::{Field, One, UniformRand, Zero};
+use rand::RngCore;
 
 use crate::{MpcithError, Result};
 
@@ -185,6 +186,44 @@ pub fn share(s: usize, ell: usize, num_parties: usize, secret: &[Fr], randomness
         .collect())
 }
 
+/// Sample uniform random polynomial coefficients of exact `degree`
+/// (leading coefficient forced nonzero).
+pub fn random_poly(degree: usize, rng: &mut impl RngCore) -> Vec<Fr> {
+    let mut coeffs: Vec<Fr> = (0..degree).map(|_| Fr::rand(rng)).collect();
+    let mut leading = Fr::rand(rng);
+    while leading.is_zero() {
+        leading = Fr::rand(rng);
+    }
+    coeffs.push(leading);
+    coeffs
+}
+
+/// Evaluate `poly` at all `N` party points.
+pub fn eval_poly_all(poly: &[Fr], s: usize, num_parties: usize) -> Vec<Fr> {
+    (0..num_parties)
+        .map(|i| eval_poly(poly, party_point(s, i)))
+        .collect()
+}
+
+/// Sample a uniformly random polynomial of exact `degree` and return its
+/// evaluations at the `N` party points. Used for hint-oracle-style sharings
+/// that carry no prescribed secret (FR25b §6.1 Π$/Π0/ΠΣ0 pre-correction
+/// outputs). Exact (not at-most) degree keeps degenerate inputs out of
+/// tests; the 1/|F| distribution difference is immaterial for a prototype
+/// that makes no zero-knowledge claim.
+pub fn random_poly_shares(
+    s: usize,
+    degree: usize,
+    num_parties: usize,
+    rng: &mut impl RngCore,
+) -> Result<Vec<Fr>> {
+    if num_parties < 2 {
+        return Err(MpcithError::InvalidParams(
+            "v3 random sharing needs at least 2 parties".into(),
+        ));
+    }
+    Ok(eval_poly_all(&random_poly(degree, rng), s, num_parties))
+}
 /// Recover the packed secret from at least `s + ℓ` shares.
 pub fn reconstruct(
     s: usize,
