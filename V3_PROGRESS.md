@@ -61,10 +61,11 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
   `m₁=ceil(1774/120)=15`, `m₂=2·1774+94=3642`; column-aligned matrix is 46×120.
   At the `s=133` reference point it is 43 rows, so the size model and Phase 0
   table were corrected from the previous generic-flat estimate.
-- Differential checks: every member in the 4-member set passes both V2 and V3;
-  out-of-range and wrong-path witnesses fail both. A small mixed-gate circuit
-  and a range circuit also pass/fail consistently.
-- Validation: `cargo test` — 289 library tests and all integration suites
+- Differential checks: every member in the 4-member set and a seeded random
+  12-member set pass both V2 and V3; out-of-range and wrong-path witnesses fail
+  both. A small mixed-gate circuit and a range circuit also pass/fail
+  consistently.
+- Validation: `cargo test` — 290 library tests and all integration suites
   passed (two expensive V2 high-M tests remain intentionally ignored). Model rerun gives
   197.0 KiB for the recommended prototype point and 88.2 KiB for the `τ=1`
   reference point after row-alignment correction. Existing warning in
@@ -76,6 +77,8 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
   model to count column-aligned `a/b/c` chunks and revises the stale V3 design
   note. The recommended point stays at 197.0 KiB; `s=133` reference layout is
   43 rows, not 41.
+- Randomized differential coverage: commit `13fdbaf` checks every member of a
+  seeded 12-member set plus seeded out-of-range and wrong-path mutations.
 - Phase 2 gate: complete for relation lowering and current deterministic
   differential cases. This does not establish correctness of the eventual MPC
   proof implementation or replace external review.

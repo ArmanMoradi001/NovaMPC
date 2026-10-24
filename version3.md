@@ -637,8 +637,8 @@ Deliverables:
 - Poseidon2 membership path constraints;
 - differential tests against the v2 circuit evaluator.
 
-Gate: broaden differential coverage and independently review the row layout
-and compiler against FR25b before using it in a prover.
+Gate: deterministic and seeded randomized differential checks pass. Independently
+review the row layout and compiler against FR25b before using it in a prover.
 
 ### Phase 3 — Range-only end-to-end proof (3–5 weeks)
 
