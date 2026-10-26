@@ -428,3 +428,19 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
 - Validation: scan script kept in /tmp (not committed); structural
   counts verified against a throwaway example (removed); no code
   changed; `git diff --stat` shows docs only.
+
+## P8.3 gate — feasibility recorded; NO-GO stands, no code or preset changes
+
+- Delivered: bounded domain search (`N ≤ 65536`, validated ranges +
+  F4 condition), per-candidate bound/size/work accounting, honest
+  thin-margin finding (collision floor caps all passes at ~1 bit),
+  τ=1/ρ=1 dominance result, recommendation to neither adopt nor retune.
+- Verdicts unchanged: classical-ROM NO-GO (now with a derived failing
+  bar for frozen presets and a conditional numerical pass set for
+  unexplored points — neither is a claim); interactive CONDITIONAL;
+  QROM/PoK/ZK NO-GO. V2 untouched; pre-existing workspace state
+  preserved (fixes.md deletion predates this work; examples/ restored
+  to prior contents); nothing pushed.
+- Next step: only external review of the Phase 6–8 derivations, or a
+  new phase with an explicit mandate. No implementation work is gated
+  on this phase.
