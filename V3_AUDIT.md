@@ -28,7 +28,7 @@ review.
 |---|---|---|
 | Prototype correctness (honest path works; malformed/tampered proofs rejected as implemented) | **GO** | E2E tests pass; every message/check traced prover↔verifier; no logic defect found (findings F3–F8 are non-blocking) |
 | Interactive soundness (idealized counterpart) | **CONDITIONAL** | Per-rep bound derived in `V3_INTERACTIVE_SOUNDNESS.md` (unreviewed); τ-composition proved for the as-built sequential schedule; FS-side composition, extraction, review still open |
-| Classical-ROM (Fiat–Shamir) security | **NO-GO** | No extractor accounting for this transcript; no KZ-aware τ proof (F2) |
+| Classical-ROM (Fiat–Shamir) security | **NO-GO** | Round-by-round union bound derived for the exact transcript (Phase 8.2, `V3_FIAT_SHAMIR.md` §2); tops out ≈ `2^{−81}` for the best preset — fails 127-bit. Tight KZ-aware composition still missing (F2, narrowed) |
 | QROM security | **NO-GO** | No applicable result (DFMS19 is 3-round-only); correctly unclaimed |
 | Proof of knowledge | **NO-GO** | No extractor; correctly unclaimed |
 | Zero knowledge | **NO-GO** | No simulator; DECS-mask deviation changes the ZK surface; correctly unclaimed |
@@ -145,7 +145,7 @@ per-repetition write-up is now delivered (unreviewed) in
 experiment is proved there; FS-side composition, extraction, and review
 remain open.
 
-### F2 [Medium] — No ROM-FS accounting exists for this exact transcript; KZ-aware τ selection unproven
+### F2 [Medium] — Union-bound ROM accounting derived in Phase 8.2; tight KZ-aware composition still missing
 
 Confirmed by inspection: nothing in the repo derives an extractor,
 per-round failure events, `Qi` bookkeeping, grinding analysis, or a
@@ -154,11 +154,18 @@ KZ-aware repetition rule for the `Γ → (γ,γ') → I` × `τ` transcript with
 (`Q·ε² ≈ 2^{−227}` worst round, collision floor `≈ 2^{−128}`, `τ=1` failing
 at `≈ 2^{−64}`) are template estimates, and my recomputation reproduces
 them exactly — the arithmetic is right, but arithmetic is not a proof.
-Any classical-ROM claim is therefore unjustified today. This restates the
-open obligations, upgraded to a finding because the audit verified the gap
-is real and located (missing: straightline-extractor failure-event
-ledger; first-challenge grinding game across `τ`; digest-size collision
-term for the mixed 256-bit/254-bit hashes).
+Any classical-ROM claim was therefore unjustified at audit time.
+Phase 8.2 update: the per-round, per-query union-bound reduction is now
+written (`V3_FIAT_SHAMIR.md` §2) with explicit Qi bookkeeping
+(determinism ⇒ tuple-counting argument), grinding priced in `Q`
+(`κi = 0` means no PoW gate to model), ChaCha20-PRG and sampling-bias
+terms listed, and collision terms enumerated. The derived bound tops
+out at ≈ `2^{−81}` (prototype, `Q = 2^64`), so it does not reach
+127-bit — and it is knowingly loose (bounds by rep 0 alone). What
+remains missing is exactly the tight analysis: a KZ-aware multi-round
+composition theorem for this transcript, without which no stronger
+classical number may be claimed, plus the extractor ledger for PoK
+(item 1/2 below, narrowed).
 
 ### F3 [Low→confirmed exploitable pre-fix; fixed Phase 8.1] — Missing repetition index collapsed amplification
 
@@ -273,11 +280,14 @@ target `2^{−128}`.
    threshold/special-soundness terms over the Phase 6 DECS lemma;
    τ-composition proved for the sequential schedule). Still needs
    independent review; FS-side composition remains Phase 8 work.
-2. Write the KZ-aware τ-selection proof for the exact
-   `Γ → (γ,γ') → I` transcript (F2).
-3. Write the classical-ROM straightline-extractor ledger (per-round
-   `Qi·εi`, digest-size collision term) or restrict scope explicitly;
-   decide grinding (`κi`) with size-equation update (F2).
+2. Prove a tight KZ-aware multi-round FS composition theorem for
+   the exact `Γ → (γ,γ') → I` × `τ` transcript, or change parameters
+   (frozen — not this phase) to meet 127-bit under a proven bound
+   (F2 remainder).
+3. Write the classical-ROM straightline- or rewinding-extractor
+   ledger with explicit forking/runtime loss for the `3τ` challenge
+   points (PoK needs this; soundness alone does not); decide grinding
+   (`κi`) with size-equation update.
 4. QROM lift or explicit classical-only claim scope (open obligation b).
 5. ZK simulator + knowledge-extractor arguments; independent
    cryptographic review and audit (open obligations).

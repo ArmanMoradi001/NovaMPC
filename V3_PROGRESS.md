@@ -365,3 +365,25 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
 - Remaining blockers for any claim: Phase 8 FS analysis (KZ-aware τ,
   extractor ledger, QROM-or-classical scope, grinding) + independent
   review + audit. Old-schedule (v1) proofs are rejected at parse.
+
+## P8.2 — classical-ROM FS reduction: round-by-round union bound (docs only)
+
+- Derived a classical-ROM reduction for the exact as-built transcript
+  (3 challenges × τ sequential reps, rep index bound post-P8.1):
+  per-round, per-query bad events (`ε_decs` via Phase 6 variant lemma,
+  `ε_fp = |F|^−ρ` with tuple-counting bookkeeping, `ε_thr` via
+  special soundness with deterministic `S(I)`), union-bounded over the
+  adversary's `Q` queries: `Pr[Forge] ≤ Q·(ε_decs + ε_fp + ε_thr) +
+  Coll + Bias`, with ChaCha20-PRG and sampling-bias terms listed as
+  explicit assumptions. Grinding (`κi = 0`) is priced in `Q`; KZ
+  cross-round allocation is covered conservatively (every query priced),
+  which is why the bound is loose rather than wrong.
+- Recomputed per preset at `Q = 2^64`: prototype ≈ `2^{−81.5}`,
+  reference ≈ `2^{−63.8}`, fast vacuous. Collision floor `2^{−128}`
+  negligible throughout. No preset reaches classical 127-bit.
+- Withdrew the `Q·ε^τ` template as a claim (no composition theorem;
+  KZ contradicts naive multiplication). Verdict: classical-ROM NO-GO
+  stands, now on a derived failing bound rather than an absent one;
+  missing piece narrowed to a tight KZ-aware composition theorem (or
+  parameters meeting 127-bit under a proven bound — frozen here).
+  PoK/ZK/QROM unchanged NO-GO. No code touched; V2 untouched.
