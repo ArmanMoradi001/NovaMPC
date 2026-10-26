@@ -330,7 +330,7 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
   FS analysis (it defines the per-round `εi` the KZ/extractor
   accounting must start from).
 
-## P8.1 — repetition separation fix (`pending hash`)
+## P8.1 — repetition separation fix (`7d7b16f`)
 
 - Finding reproduced pre-fix: `cloned_repetition_slot_is_rejected`
   FAILED (cloned rep accepted) while honest τ=2 verified — identical
@@ -351,3 +351,17 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
   (construction now binds rep index), `V3_AUDIT.md` F3 (confirmed +
   fixed).
 - Validation: `cargo test` full suite, zero failures.
+
+## P8.1 gate — repetition separation repaired; FS proof still open
+
+- Delivered: reproduced amplification collapse, narrow fix (rep index
+  in transcript prefix + domain/format versioning), regression tests,
+  doc updates. No V2 changes; pre-existing workspace state preserved;
+  nothing pushed.
+- Verdicts: unchanged (interactive CONDITIONAL; classical-ROM, QROM,
+  PoK, ZK NO-GO). This fix repairs only cross-repetition separation.
+  It does NOT prove FS security, KZ-aware repetition, ROM extraction,
+  QROM security, PoK, or ZK, and makes no 127-bit claim.
+- Remaining blockers for any claim: Phase 8 FS analysis (KZ-aware τ,
+  extractor ledger, QROM-or-classical scope, grinding) + independent
+  review + audit. Old-schedule (v1) proofs are rejected at parse.
