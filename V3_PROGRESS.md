@@ -479,3 +479,40 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
   sampling-bias assumptions; Q=2^64 budget.
 - Next step: only actual external review, or a new phase with an
   explicit mandate. No implementation work is gated on this phase.
+
+## P10 — V3 verifier performance
+
+- Measured the existing prototype point (`N=8192, ℓ=30, s=120, η=6,
+  ρ=1, τ=2`; 32-member combined statement; 215,034-byte proof) with a
+  temporary release benchmark (`cargo run --offline --release --example
+  v3_bench_tmp`; untracked harness, not committed). Before changes:
+  `prove_ms=420193.7`, `proof_bytes=215034`,
+  `verify_ms[0]=216844.8`, `verify_ms[1]=202727.5`. The dominant cost
+  was repeated Gaussian elimination to interpolate the same
+  fixed-coordinate LPPC polynomials across 3,642 constraints.
+- Reused the fixed interpolation transform (`FixedInterpolator`: one
+  Vandermonde inversion, O(s²) per interpolation), replaced
+  cubic-time verifier/prover interpolation with an O(n²) Lagrange
+  implementation (`interpolate_coeffs_fast`), and evaluated sparse LPPC
+  constraints directly from lane coefficients
+  (`eval_linear_jb_sparse`), skipping per-constraint polynomial
+  construction and repeated evaluation. After changes (two runs):
+  `prove_ms=5514.9/5763.8`, same `proof_bytes=215034`,
+  `verify_ms=305.7/299.8` and `300.3/300.3`. Verification is ~700×
+  faster at the same proof size; proving is ~74× faster in the same
+  harness. Proof bytes are byte-length-identical and verification
+  behavior is unchanged (exact field arithmetic; same unique
+  interpolants).
+- Added equivalence tests for the interpolation transform and basis
+  weights (`fast_interpolation_matches_reference`,
+  `fixed_interpolator_matches_reference`,
+  `sparse_jb_evaluation_matches_pack_polys`) plus a verifier
+  regression test (`tampered_broadcast_shares_reject`). `cargo test`
+  passed: 304 library tests and all integration suites (two
+  pre-existing expensive V2 tests remain ignored; one pre-existing
+  warning in untouched `src/v3/hints.rs`).
+- These are algebra-preserving performance changes; they do not
+  address the still-open V3 security claims, and no cryptographic
+  security is claimed on the basis of this work. V2 and unrelated
+  worktree state preserved (`fixes.md` deletion predates this work;
+  untracked files untouched); nothing pushed.
