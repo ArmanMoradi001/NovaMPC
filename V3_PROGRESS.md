@@ -407,3 +407,24 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
 - Next step: only external review of the Phase 6–8 derivations, or a
   new phase with an explicit mandate (e.g. parameter redesign under a
   proven bound, grinding analysis with size update, QROM treatment).
+
+## P8.3 — parameter feasibility under the union bound (docs only)
+
+- Wrote `V3_PARAMETER_FEASIBILITY.md`: searched `N ∈ {4096,…,65536}`,
+  `ℓ ∈ {16,…,64}`, `s ∈ {48,…,512}`, `ρ ∈ {1,2}`, `τ ∈ {1,2}` with the
+  Phase 8.2 bound at `Q = 2^64`, model sizes + measured overhead, and
+  release-baseline-fitted work estimates (±5× stated).
+- Result: ~1000 grid points pass numerically (e.g. `N=65536, ℓ=24,
+  s=96, η=6`: total `≈ 2^{−127.9}`, wire `≈ 97 KiB`, prove/verify
+  minutes-to-tens-of-minutes, ~150 MB RSS), but every pass sits at
+  total `≈ 2^{−128}` — the Q²/2^256 collision floor caps all margins
+  at ~1 bit by construction. τ=1 strictly dominates (bound ignores
+  extra reps); ρ=1 likewise.
+- Recommendation recorded: numbers fit, proofs don't exist — no
+  adoption, no retuning, no claim. Next: review + tight analysis, or a
+  separately-mandated track (parameter redesign under proven bound /
+  grinding / QROM); minute-scale proving is a deployment question in
+  its own right.
+- Validation: scan script kept in /tmp (not committed); structural
+  counts verified against a throwaway example (removed); no code
+  changed; `git diff --stat` shows docs only.

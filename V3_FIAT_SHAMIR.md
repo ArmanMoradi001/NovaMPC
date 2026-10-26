@@ -206,3 +206,24 @@ otherwise) secure. No code changes result from this phase; the
 implementation, presets, and proof format are untouched, and the
 stop-condition parameter freeze is respected (no tuning was performed
 to chase the bound).
+
+## 6. Phase 8.3 feasibility note (no code, no preset changes)
+
+A bounded parameter search under the §2 bound (`Q = 2^64`) finds
+numerically passing points — e.g. `N=65536, ℓ=24, s=96, η=6, ρ=1,
+τ=1`: total `≈ 2^{−127.9}`, modeled wire size `≈ 97 KiB`. Full table,
+domain, work estimates, and caveats: `V3_PARAMETER_FEASIBILITY.md`.
+Two structural consequences, both derived not assumed:
+
+- τ (and ρ > 1) buy nothing under the proven bound: the §2 reduction
+  bounds forgery by rep 0 alone, so extra repetitions only add size.
+  τ=1 strictly dominates; this supersedes the Phase 0 `τ = 2`
+  recommendation, which relied on unproved composition.
+- Every passing point sits at total `≈ 2^{−128}`, i.e. the collision
+  floor — margins can never exceed ~1 bit under this accounting, by
+  construction, not by parameter choice.
+
+These are feasibility *numbers under stated assumptions*, not
+evidence of security. §5's NO-GO stands unchanged: the bound is
+unreviewed, the tight KZ-aware analysis is missing, and the margin
+is too thin to absorb it.
