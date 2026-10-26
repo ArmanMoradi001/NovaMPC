@@ -296,7 +296,7 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
 - Validation: docs only; numbers recomputed independently
   (`/tmp/p7_recompute.py`).
 
-## P7.2 — τ-composition + numbers + audit updates (`pending hash`)
+## P7.2 — τ-composition + numbers + audit updates (`be82a51`)
 
 - Proved `ε_τ ≤ (ε₁)^τ` for the as-built sequential schedule by
   conditional induction (uniform single-rep game per history slice);
@@ -313,3 +313,19 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
 - Updated `V3_AUDIT.md` (F1 resolution pointer, verdict basis,
   assumptions, fixes list) to record the delivered per-rep write-up.
 - Validation: no code touched; `git diff` scope checked.
+
+## P7 gate — interactive soundness derived, no claim; Phase 8 cleared to proceed
+
+- Delivered: exact interactive experiment spec, single-rep bound with
+  per-term justification, τ-composition proof for the sequential
+  schedule, recomputed per-preset table, audit updates. No code
+  changed; V2 and pre-existing files preserved; nothing pushed.
+- Verdicts: interactive soundness CONDITIONAL (derived, unreviewed;
+  needs independent review + per-rep/τ write-up acceptance); all other
+  verdicts unchanged (classical-ROM/QROM/PoK/ZK NO-GO).
+- Remaining blockers for any claim: Phase 8 FS analysis (KZ-aware τ,
+  extractor ledger, QROM-or-classical scope, grinding) + independent
+  review + audit. F1 narrowed to review-only; F2 untouched.
+- Phase 8 may proceed: the interactive bound is the correct input to
+  FS analysis (it defines the per-round `εi` the KZ/extractor
+  accounting must start from).
