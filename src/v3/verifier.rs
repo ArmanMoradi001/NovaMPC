@@ -107,12 +107,13 @@ pub fn verify_combined_v3(
         )));
     }
 
-    for rep in &proof.reps {
+    for (rep_index, rep) in proof.reps.iter().enumerate() {
         verify_rep(
             rep, &program, &pack_polys, params, s, ell, n, eta, rho,
             d_beta, d_alpha, d2, n_w, m1, num_q, n_hints,
             &pi_v, &pi_vp, &context, &circuit_hash, &proof.salt,
             lo, hi, &proof.set_root, num_members, depth,
+            rep_index as u32,
         )?;
     }
     Ok(())
@@ -133,6 +134,7 @@ fn verify_rep(
     circuit_hash: &[u8; 32],
     salt: &[u8; 32],
     lo: u32, hi: u32, set_root: &[u8; 32], num_members: u32, depth: u32,
+    rep_index: u32,
 ) -> Result<()> {
     let fail = |msg: &str| MpcithError::VerificationFailed(msg.into());
 
@@ -152,7 +154,7 @@ fn verify_rep(
     let mut tr = TranscriptV3::new(
         params.num_parties, params.privacy_threshold, params.packing_width,
         params.decs_reps, params.mpc_reps, params.pok_reps,
-        lo, hi, set_root, num_members, depth, context, circuit_hash, salt,
+        lo, hi, set_root, num_members, depth, context, circuit_hash, salt, rep_index,
     );
     tr.absorb_hash(b"h1", &rep.commitment_root);
     let gamma = tr.sample_frs(V3_TR_TAG_GAMMA, 0, eta * num_q);

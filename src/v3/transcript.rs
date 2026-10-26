@@ -18,7 +18,9 @@ use crate::v2::field::encode_fr;
 use crate::{MpcithError, Result};
 
 /// Transcript domain: statement and suite binding prefix.
-pub const V3_TR_DOMAIN_INIT: &[u8] = b"NovaMPC-v3/transcript/v1";
+/// v2 binds the repetition index (Phase 8.1); v1 transcripts derive
+/// different challenges and are not equivalent.
+pub const V3_TR_DOMAIN_INIT: &[u8] = b"NovaMPC-v3/transcript/v2";
 /// Challenge tag: DECS matrix `Γ`.
 pub const V3_TR_TAG_GAMMA: &[u8] = b"v3-decs-challenge";
 /// Challenge tag: MPC batching randomness `(γ, γ')`.
@@ -40,7 +42,9 @@ pub struct TranscriptV3 {
 
 impl TranscriptV3 {
     /// Open a transcript bound to everything the verifier pins: suite,
-    /// parameters, expected statement, context, circuit hash, and salt.
+    /// parameters, expected statement, context, circuit hash, salt, and the
+    /// repetition index. The index separates parallel repetitions: identical
+    /// rep payloads at different indices derive different challenges.
     /// No challenge may be drawn before `h1` is absorbed (call
     /// [`Self::absorb_h1`] first).
     pub fn new(
@@ -58,6 +62,7 @@ impl TranscriptV3 {
         context: &[u8; 32],
         circuit_hash: &[u8; 32],
         salt: &[u8; 32],
+        rep_index: u32,
     ) -> Self {
         let mut t = Self {
             state: blake3::Hasher::new(),
@@ -79,6 +84,7 @@ impl TranscriptV3 {
         t.absorb(b"context", context);
         t.absorb(b"circuit", circuit_hash);
         t.absorb(b"salt", salt);
+        t.absorb_u32(b"rep", rep_index);
         t
     }
 
@@ -212,7 +218,7 @@ mod tests {
     }
 
     fn test_transcript() -> TranscriptV3 {
-        TranscriptV3::new(32, 3, 8, 2, 1, 1, 1, 1000, &[7u8; 32], 4, 2, &[9u8; 32], &[11u8; 32], &[13u8; 32])
+        TranscriptV3::new(32, 3, 8, 2, 1, 1, 1, 1000, &[7u8; 32], 4, 2, &[9u8; 32], &[11u8; 32], &[13u8; 32], 0)
     }
 
     #[test]
@@ -251,6 +257,46 @@ mod tests {
         assert_eq!(sorted.len(), 3);
         assert_eq!(s, t.sample_subset(V3_TR_TAG_OPEN, 0, 32, 3).unwrap());
         assert!(t.sample_subset(V3_TR_TAG_OPEN, 0, 4, 5).is_err());
+    }
+
+    #[test]
+    fn repetition_index_separates_challenges() {
+        // Same statement/params/context/salt/circuit, same absorbed h1:
+        // different rep indices must derive different challenges in every
+        // round, while the same index stays deterministic.
+        let mk = |rep: u32| {
+            TranscriptV3::new(
+                32, 3, 8, 2, 1, 1, 1, 1000, &[7u8; 32], 4, 2, &[9u8; 32], &[11u8; 32],
+                &[13u8; 32], rep,
+            )
+        };
+        let mut t0 = mk(0);
+        let mut t1 = mk(1);
+        t0.absorb_hash(b"h1", &[42u8; 32]);
+        t1.absorb_hash(b"h1", &[42u8; 32]);
+        assert_ne!(
+            t0.sample_frs(V3_TR_TAG_GAMMA, 0, 4),
+            t1.sample_frs(V3_TR_TAG_GAMMA, 0, 4)
+        );
+        assert_ne!(
+            t0.sample_frs(V3_TR_TAG_BATCH, 0, 4),
+            t1.sample_frs(V3_TR_TAG_BATCH, 0, 4)
+        );
+        assert_ne!(
+            t0.sample_subset(V3_TR_TAG_OPEN, 0, 32, 10).unwrap(),
+            t1.sample_subset(V3_TR_TAG_OPEN, 0, 32, 10).unwrap()
+        );
+        // Same index reproduces every challenge exactly.
+        let mut t0b = mk(0);
+        t0b.absorb_hash(b"h1", &[42u8; 32]);
+        assert_eq!(
+            t0.sample_frs(V3_TR_TAG_GAMMA, 0, 4),
+            t0b.sample_frs(V3_TR_TAG_GAMMA, 0, 4)
+        );
+        assert_eq!(
+            t0.sample_subset(V3_TR_TAG_OPEN, 0, 32, 3).unwrap(),
+            t0b.sample_subset(V3_TR_TAG_OPEN, 0, 32, 3).unwrap()
+        );
     }
 
     #[test]

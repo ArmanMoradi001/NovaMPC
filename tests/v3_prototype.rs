@@ -64,6 +64,72 @@ fn deterministic_under_seeded_rng() {
     assert_eq!(mk(), mk());
 }
 
+fn tau2_small_params() -> V3Params {
+    // Same shape as fast_insecure_test but τ=2: cheap enough for debug
+    // e2e while exercising genuine multi-repetition verification.
+    V3Params::new(32, 3, 8, 2, 1, 2)
+}
+
+#[test]
+fn honest_two_repetition_proof_verifies_and_round_trips() {
+    let tree = small_tree();
+    let params = tau2_small_params();
+    let proof_tx = tree.prove_membership(1).unwrap();
+    let context = [7u8; 32];
+    let proof = prove_combined_v3(
+        10, 40, tree.root(), tree.num_members(), tree.depth(), 20, &proof_tx, context, &params,
+        &mut rng(),
+    )
+    .unwrap();
+    assert_eq!(proof.reps.len(), 2);
+    let statement = mpcith_zk::v2::predicate::StatementV2::Combined {
+        range: mpcith_zk::v2::predicate::RangeStatementV2::new(10, 40).unwrap(),
+        membership: mpcith_zk::v2::predicate::MembershipStatementV2::new(
+            tree.root(),
+            tree.num_members(),
+            tree.depth(),
+        )
+        .unwrap(),
+    };
+    verify_combined_v3(&proof, &statement, context, &params).unwrap();
+    let bytes = proof.to_bytes().unwrap();
+    assert_eq!(V3Proof::from_bytes(&bytes).unwrap(), proof);
+    verify_combined_v3(&V3Proof::from_bytes(&bytes).unwrap(), &statement, context, &params)
+        .unwrap();
+}
+
+#[test]
+fn cloned_repetition_slot_is_rejected() {
+    // Adversary reuses one repetition payload in both slots. The two
+    // transcripts differ only after h1; identical h1 forces identical
+    // challenges, so a pre-fix verifier accepts this with the cost of a
+    // single repetition. This must be rejected.
+    let tree = small_tree();
+    let params = tau2_small_params();
+    let proof_tx = tree.prove_membership(1).unwrap();
+    let context = [7u8; 32];
+    let proof = prove_combined_v3(
+        10, 40, tree.root(), tree.num_members(), tree.depth(), 20, &proof_tx, context, &params,
+        &mut rng(),
+    )
+    .unwrap();
+    let statement = mpcith_zk::v2::predicate::StatementV2::Combined {
+        range: mpcith_zk::v2::predicate::RangeStatementV2::new(10, 40).unwrap(),
+        membership: mpcith_zk::v2::predicate::MembershipStatementV2::new(
+            tree.root(),
+            tree.num_members(),
+            tree.depth(),
+        )
+        .unwrap(),
+    };
+    let mut cloned = proof.clone();
+    cloned.reps[1] = proof.reps[0].clone();
+    assert!(
+        verify_combined_v3(&cloned, &statement, context, &params).is_err(),
+        "cloned repetition slot accepted: repetition amplification collapses"
+    );
+}
+
 #[test]
 fn false_statements_cannot_prove() {
     let tree = small_tree();

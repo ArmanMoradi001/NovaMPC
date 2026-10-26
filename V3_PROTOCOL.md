@@ -24,7 +24,7 @@ Prover holds `w`; both sides hold statement, params, context.
 
 | # | Dir | Message | FR25b basis |
 |---|---|---------|-------------|
-| 1 | P→V | `salt ∈ {0,1\}^{2λ}` (fresh per proof), Merkle root `h1` over `N` leaves `com_i = Com(JwK_i ∥ JuK_i ∥ JβK_i… ; ρ_i)` (witness packs, DECS mask packs, hint packs of JvK/Jv′K) | P5.1; salt follows SmallWood §5.3 (multi-proof binding), absent in FR25b — recorded delta |
+| 1 | P→V | `salt ∈ {0,1\}^{2λ}` (fresh per proof), Merkle root `h1` over `N` leaves `com_i = Com(JwK_i ∥ JuK_i ∥ JβK_i… ; ρ_i)` (witness packs, DECS mask packs, hint packs of JvK/Jv′K). Transcript prefix per rep additionally absorbs `rep_index` (Phase 8.1; domain v2) | P5.1; salt follows SmallWood §5.3 (multi-proof binding), absent in FR25b — recorded delta |
 | 2 | V→P | `Γ ∈ F^{η×\|Q\|}` where, as implemented, `\|Q\|` = witness + mask + hint packs (`prover.rs:190-197`; deviation (a) below — paper's `Q` excludes the mask) | P5.1a–b, Eq. 14–15 |
 | 3 | P→V | `h1' = Hash(Pξ)`, `Pξ = Γ·Q̃` with `Q̃` the shift-augmented columns (deviation (b) below); paper: `Pξ = Γ·Q + Pu`, Eq. 15 | P5.1b |
 | 4 | V→P | batching `γ ∈ F^{m1}`, `γ' ∈ F^{m2}` | Prot. 8 step 4 |

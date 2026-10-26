@@ -360,6 +360,12 @@ mod tests {
         let mut badver = bytes.clone();
         badver[8] = 0xFF;
         assert!(V3Proof::from_bytes(&badver).is_err());
+        // Old schedule: version 1 proofs (pre-repetition-index transcript)
+        // must fail closed, never silently re-evaluate under v2 challenges.
+        let mut oldver = proof.to_bytes().unwrap();
+        oldver[8] = 0x00;
+        oldver[9] = 0x01;
+        assert!(V3Proof::from_bytes(&oldver).is_err());
         // Trailing byte.
         bytes.push(0);
         assert!(V3Proof::from_bytes(&bytes).is_err());

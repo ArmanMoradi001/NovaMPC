@@ -329,3 +329,25 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
 - Phase 8 may proceed: the interactive bound is the correct input to
   FS analysis (it defines the per-round `εi` the KZ/extractor
   accounting must start from).
+
+## P8.1 — repetition separation fix (`pending hash`)
+
+- Finding reproduced pre-fix: `cloned_repetition_slot_is_rejected`
+  FAILED (cloned rep accepted) while honest τ=2 verified — identical
+  `h1` at two slots derived identical `Γ`/batching/`I`, collapsing
+  repetition amplification to a single rep's cost. Adversary-chosen
+  repetition, not RNG failure.
+- Fix: explicit `rep_index` absorbed in the transcript prefix
+  (`transcript.rs`, both prover/verifier call sites pass the loop
+  index); domain v1→v2; proof format v1→v2 so old-schedule proofs fail
+  closed at parse. No wire-format fields added (index is a loop
+  counter); size model unchanged.
+- Tests: pre-fix red run recorded above; post-fix green — new
+  transcript unit test (index separates all three challenge rounds;
+  same index deterministic), cloned-slot rejection, honest τ=2
+  verify + round-trip, v1-format rejection. Full suite green
+  (301 lib incl. 36 v3; all integration incl. 7-test v3_prototype).
+- Docs: `V3_PROTOCOL.md` (rep index in transcript), `V3_FIAT_SHAMIR.md`
+  (construction now binds rep index), `V3_AUDIT.md` F3 (confirmed +
+  fixed).
+- Validation: `cargo test` full suite, zero failures.

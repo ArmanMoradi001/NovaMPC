@@ -7,15 +7,18 @@ that is stated as an open question.
 ## 1. FS construction specified for implementation
 
 Three FS challenges per PoK repetition, in transcript order
-(`V3_PROTOCOL.md` §1): `Γ` (after `salt, h1`), batching `(γ,γ')` (after
-`h1'`), opening set `I` (after `hB`). Each challenge = `XOF(domain ‖
-transcript-so-far)` covering statement, params, context, and all prior
-messages. No grinding (`κi = 0`, as in FR25b; SmallWood-style
-proof-of-work explicitly deferred — adding it later changes the size
-equation). `τ` repetitions are independent (fresh sharing randomness per
-repetition) with per-repetition challenges. This construction is
-implementable from the cited templates (FR25b P5 + SmallWood Fig. 8
-structure); the *loss bound* below is what remains open.
+(`V3_PROTOCOL.md` §1): `Γ` (after `salt, rep-index, h1`), batching
+`(γ,γ')` (after `h1'`), opening set `I` (after `hB`). Each challenge =
+`XOF(domain ‖ transcript-so-far)` covering statement, params, context,
+rep index, and all prior messages. No grinding (`κi = 0`, as in FR25b;
+SmallWood-style proof-of-work explicitly deferred — adding it later
+changes the size equation). `τ` repetitions are independent (fresh
+sharing randomness per repetition) with per-repetition challenges bound
+to distinct rep indices (Phase 8.1 fix: identical rep payloads at
+different indices derive different challenges; transcript domain v2,
+proof format v2). This construction is implementable from the cited
+templates (FR25b P5 + SmallWood Fig. 8 structure); the *loss bound*
+below is what remains open.
 
 ## 2. Classical ROM: the applicable template and its cost
 

@@ -88,10 +88,10 @@ pub fn prove_combined_v3(
     let set_root = encode_fr(&root);
 
     let mut reps = Vec::with_capacity(params.pok_reps as usize);
-    for _ in 0..params.pok_reps {
+    for rep in 0..params.pok_reps {
         reps.push(prove_rep(
             &matrix, &program, params, &context, &circuit_hash, &salt,
-            lo, hi, &set_root, num_members, depth, rng,
+            lo, hi, &set_root, num_members, depth, rep, rng,
         )?);
     }
 
@@ -122,6 +122,7 @@ fn prove_rep(
     set_root: &[u8; 32],
     num_members: u32,
     depth: u32,
+    rep_index: u32,
     rng: &mut impl RngCore,
 ) -> Result<RepProofV3> {
     let s = params.packing_width as usize;
@@ -191,7 +192,7 @@ fn prove_rep(
     let mut tr = TranscriptV3::new(
         params.num_parties, params.privacy_threshold, params.packing_width,
         params.decs_reps, params.mpc_reps, params.pok_reps,
-        lo, hi, set_root, num_members, depth, context, circuit_hash, salt,
+        lo, hi, set_root, num_members, depth, context, circuit_hash, salt, rep_index,
     );
     tr.absorb_hash(b"h1", &h1);
     let gamma = tr.sample_frs(V3_TR_TAG_GAMMA, 0, eta * num_q);

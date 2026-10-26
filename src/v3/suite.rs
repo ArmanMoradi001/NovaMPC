@@ -7,8 +7,10 @@
 /// V3 proof-format magic. Distinct from every v2 magic/version value.
 pub const V3_PROOF_MAGIC: &[u8; 8] = b"NMPCV3T\0";
 
-/// V3 proof-format version. V2's `V2_PROOF_VERSION = 3` is not reinterpreted.
-pub const V3_PROOF_FORMAT_VERSION: u16 = 1;
+/// V3 proof-format version. Version 2 binds the per-repetition transcript
+/// index (Phase 8.1); version-1 proofs derive different challenges and are
+/// rejected at parse, never silently re-evaluated.
+pub const V3_PROOF_FORMAT_VERSION: u16 = 2;
 
 /// V3 protocol family identifier (TCitH-MT over the ΠLigero LPPC protocol).
 pub const V3_PROTOCOL_ID: &[u8] = b"NovaMPC-v3/tcith-mt/pi-ligero/v1";
@@ -49,7 +51,7 @@ mod tests {
     #[test]
     fn suite_identifiers_are_versioned_and_distinct_from_v2() {
         assert_eq!(V3_SUITE.version, V3_PROOF_FORMAT_VERSION);
-        assert_eq!(V3_SUITE.version, 1);
+        assert_eq!(V3_SUITE.version, 2);
         // Magic length is fixed at 8 bytes including the NUL terminator.
         assert_eq!(V3_PROOF_MAGIC.len(), 8);
         assert_eq!(V3_PROOF_MAGIC, b"NMPCV3T\0");

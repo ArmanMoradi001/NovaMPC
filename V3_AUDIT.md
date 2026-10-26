@@ -160,14 +160,22 @@ is real and located (missing: straightline-extractor failure-event
 ledger; first-challenge grinding game across `τ`; digest-size collision
 term for the mixed 256-bit/254-bit hashes).
 
-### F3 [Low] — No repetition index in the transcript
+### F3 [Low→confirmed exploitable pre-fix; fixed Phase 8.1] — Missing repetition index collapsed amplification
 
-`TranscriptV3::new` absorbs an identical prefix per repetition
-(`transcript.rs:62-83`); per-rep separation comes only from differing `h1`
-values (fresh sharing randomness per rep, `prover.rs:91-96`). Two reps
-with colliding `h1` (RNG reuse/catastrophe) would draw identical
-challenges. Add a rep index to the absorbed prefix (both sides) as
-defense-in-depth. Not exploitable under honest randomness.
+`TranscriptV3::new` absorbed an identical prefix per repetition; separation
+came only from differing `h1`. Reproduced (test
+`cloned_repetition_slot_is_rejected`, pre-fix run): cloning one honest
+rep payload into the other τ slot verified successfully — an adversary
+could replay one favorable rep at the cost of a single repetition,
+collapsing the intended `τ`-fold amplification entirely. Not merely an
+RNG-reuse concern: the adversary chooses the repeated messages.
+Fix (Phase 8.1, `transcript.rs:21,46-83`, `prover.rs:90-96`,
+`verifier.rs:110-117`): explicit `rep_index` absorbed in the prefix;
+transcript domain v1→v2; proof format v1→v2 so old-schedule proofs fail
+closed at parse. Verified: cloned slot rejected; honest τ=2 still
+verifies; identical payloads at different indices derive different
+`Γ`/batching/`I` (new unit test). No proof-size impact (index is a loop
+counter, never transmitted).
 
 ### F4 [Low] — `validate()` does not enforce `dα+1 ≤ N`
 
