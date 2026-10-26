@@ -230,6 +230,20 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
   all open. Not secure, not zero-knowledge, not 127-bit.
 - V2 code/tests/docs unchanged; pre-existing `fixes.md` deletion and
   untracked files preserved; nothing pushed.
-- Next step: hardening/measurement follow-ups only if tasked (broadcast
-  reconstruction optimization, perf); no prover-logic changes without a
-  new phase.
+## P6.1 — verify DECS source equations (`pending hash`)
+
+- Obtained an authoritative FR25b copy (eprint PDF via Wayback snapshot
+  2025-12-09; JoC version) after the audit-phase retrieval failures.
+  Verified directly: Eq. 13 (basic `JξK`), Eq. 14 (plain concatenation,
+  NO shifts), Eq. 15 (`Pξ := Γ·Q + Pu`), Theorem 1
+  (`C(N,d+2)/|F|^η` + proof Eqs. 7–9), Theorem 2/Eq. 16 (MT bound),
+  Lemma 1 (Π$ `n`/`δ`/last-degree), Π0 (`×P0`), ΠΣ0 (`Δu1` + footnote 10
+  Lagrange correction), Protocol 5 (message order, `S`/`Sξ` sizes,
+  hash-equality checks), §6.4 ΠLigero (`m1`/`m2`/degrees), Eq. 18 size
+  formula, KZ selection rules, footnote-12 input optimization.
+- Findings vs implementation: (a) mask folded into Γ (deviation,
+  detection mechanism preserved); (b) the "word-rule vs printed Eq. 13"
+  note referred to text absent from this revision — withdrawn; the
+  `X`-shifts are an implementation-side conservative strengthening.
+  `V3_PROTOCOL.md` corrected (rows 2–3, check 3, new §1b deviations).
+- Next step: P6.2 variant DECS lemma + decision.
