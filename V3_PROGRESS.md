@@ -387,3 +387,23 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
   missing piece narrowed to a tight KZ-aware composition theorem (or
   parameters meeting 127-bit under a proven bound — frozen here).
   PoK/ZK/QROM unchanged NO-GO. No code touched; V2 untouched.
+
+## P8.2 gate — classical-ROM analysis complete; NO-GO stands with derivation
+
+- Delivered: exact-transcript model (post-P8.1 schedule), round-by-round
+  union-bound reduction with explicit query bookkeeping, grinding/KZ/
+  collision/extraction analysis, per-preset recomputation, audit +
+  doc updates. Zero code changes; V2 and pre-existing workspace state
+  preserved; nothing pushed.
+- Verdicts: classical-ROM NO-GO (derived bound tops out ≈ `2^{−81}`;
+  tight KZ-aware composition missing); interactive CONDITIONAL;
+  QROM/PoK/ZK NO-GO — all unchanged in direction, now with stated
+  derivations instead of open accounting gaps. No 127-bit (or any-bits)
+  claim is made or supported.
+- Remaining blockers for any claim: tight KZ-aware composition theorem
+  (or proven-bound-satisfying parameters — frozen), ROM extractor
+  ledger + PoK forking analysis, QROM lift or explicit classical-only
+  scope, ZK simulator, independent review + audit.
+- Next step: only external review of the Phase 6–8 derivations, or a
+  new phase with an explicit mandate (e.g. parameter redesign under a
+  proven bound, grinding analysis with size update, QROM treatment).
