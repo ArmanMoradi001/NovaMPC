@@ -444,3 +444,38 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
 - Next step: only external review of the Phase 6–8 derivations, or a
   new phase with an explicit mandate. No implementation work is gated
   on this phase.
+
+## P9.1 — external security review packet (docs only)
+
+- Wrote `V3_EXTERNAL_REVIEW.md`: self-contained reviewer packet with
+  protocol summary, verdicts (GO functionality only; NO-GO everywhere
+  security-relevant), the three core derivations with assumptions,
+  six reviewer questions answered with explicit status labels
+  (established vs argued-not-proved vs open), source trail (Phase 6
+  Wayback snapshot; eprint 403/404 today; KZ/DFMS19 abstract-only),
+  and reproducibility/limits.
+- Findings while drafting: one imprecision corrected in
+  `V3_FIAT_SHAMIR.md` §2 (unqueried-input case now bounded by the
+  per-round ε as a fresh uniform draw, absorbed as Q+1 ≈ Q, instead of
+  the incorrect 2^{−256}-guessing formulation; numerically nil, no
+  verdict change). No code changed; no parameters touched.
+- Validation: model script rerun (calibration 130.8 vs 130.0 KiB);
+  `cargo test --lib v3::` green (35 passed); per-preset terms
+  recomputed independently (agree to 0.1 bit); all code citations in
+  the packet verified against current sources.
+
+## P9 gate — review packet delivered; independent review still required
+
+- Delivered: `V3_EXTERNAL_REVIEW.md` plus one precision fix to the
+  §2 union-bound bookkeeping. No code, parameter, or proof-format
+  changes. V2 and pre-existing workspace state preserved
+  (`fixes.md` deletion predates this work; untracked files untouched);
+  nothing pushed.
+- The packet explicitly asks the reviewer to check: DECS variant
+  lemma's bad-E enclosure step; interactive special-soundness
+  extraction (cited, not written); F4 precondition enforcement;
+  τ-composition's irrelevance to deployed proofs; KZ-aware tight
+  bound (missing); per-digest collision bookkeeping; ChaCha20-PRG and
+  sampling-bias assumptions; Q=2^64 budget.
+- Next step: only actual external review, or a new phase with an
+  explicit mandate. No implementation work is gated on this phase.
