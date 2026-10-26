@@ -56,8 +56,12 @@ modelled as RO, 256-bit outputs) then outputs one proof; `Forge` =
 verifier accepts on a fixed false statement. Every challenge value in
 a verifying proof equals the RO output on a transcript-determined
 input, so each challenge is either a fresh uniform draw (input never
-queried before: guessing probability `≤ 2^{−256}` per value, folded
-into the collision terms) or the output of one of `A`'s `Q` queries.
+queried: bounded by the same per-round `ε` as a queried input, since
+a uniform draw independent of the adversary's view is exactly what the
+per-round lemmas assume — Phase 9 correction: the earlier text folded
+this into collisions at guessing probability `2^{−256}`, which
+understates it; the correction is numerically nil and is absorbed as
+`Q+1 ≈ Q`) or the output of one of `A`'s `Q` queries.
 Union bound over queries is therefore legitimate for every round, with
 no independence assumption across reps: it suffices to bound
 `Pr[rep 0 accepts]`, since forgery requires all reps to accept.
