@@ -247,7 +247,7 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
   `X`-shifts are an implementation-side conservative strengthening.
   `V3_PROTOCOL.md` corrected (rows 2–3, check 3, new §1b deviations).
 - Next step: P6.2 variant DECS lemma + decision.
-## P6.2 — DECS variant lemma + decision (`pending hash`)
+## P6.2 — DECS variant lemma + decision (`25d4912`)
 
 - Wrote the algebraic comparison (paper `Pξ = Γ·Q + Pu`, plain-concat
   Eq. 14, no shifts anywhere in the JoC revision vs implemented
@@ -263,3 +263,20 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
   write-up + τ-composition still required).
 - Validation: primary-source equations re-checked line by line; no code
   touched (only docs).
+
+## P6 gate — DECS deviation resolved as different-but-sound; no code change
+
+- F1 closed as a blocking unknown: primary source verified (Eqs. 13–15,
+  Thm 1/2, Lemma 1, Π0/ΠΣ0, P5, §6.4, Eq. 18, KZ rules); variant DECS
+  lemma written with the identical `C(N,dβ+2)/|F|^η` term; decision: no
+  prover/verifier change (shifts are conservative; mask folding covered
+  by the same union bound; exact-paper-match edits would be churn).
+- Verdicts: interactive soundness stays CONDITIONAL (narrowed: composed
+  per-rep write-up + τ-composition still required); classical-ROM, QROM,
+  PoK, ZK stay NO-GO; no security claim of any kind.
+- Validation: docs only; `git diff` confirms zero `src/`/`tests/`
+  changes in Phase 6; V2 and pre-existing workspace changes preserved;
+  nothing pushed.
+- Next step: only the F2/open-obligation proof work (extractor, KZ-aware
+  τ, QROM-or-classical scope, ZK) or external review can advance claims;
+  no implementation work is gated on this phase.
