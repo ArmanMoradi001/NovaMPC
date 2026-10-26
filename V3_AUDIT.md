@@ -12,25 +12,22 @@ of the parameter/soundness/size arithmetic (script in `/tmp`, not in repo);
 parser hardening review; test-coverage review. All `file:line` references
 below are against commit `f2bc1c8`.
 
-Method limitation (stated plainly): the FR25b full-text PDF (eprint
-2023/1573, JoC revision) and the SmallWood full text (2025/1085) were not
-retrievable from this environment (Cloudflare 403 on eprint/iacr.org and
-ia.cr; no arXiv or HAL mirror found; no vendored copy in the repo).
-Equation-level citations (`Thm 1/2`, `Eq. 13–16`, `Lemma 1/3`, `Protocol
-5/8`, `SmallWood Thm 9`, `DFMS19`, `KZ20a`) are therefore checked against
-the Phase 0/3 derivation records plus independent re-derivation from the
-standard TCitH/LPPC construction, not against fresh full text. Where a
-claim below depends on an uncited-formula detail, it is marked
-unverifiable-in-this-session rather than assumed.
-
-This audit is not a substitute for external cryptographic review.
+Method limitation (updated Phase 6): the audit-phase retrieval failures
+are superseded for FR25b — the JoC-revision full text was obtained via a
+Wayback snapshot of the eprint PDF, and every equation used in the F1
+resolution was verified against it (Eqs. 13–16, 18; Theorems 1–2; Lemma 1;
+Π0/ΠΣ0 + footnote 10; Protocol 5; §6.4 ΠLigero; KZ selection rules).
+SmallWood full text remains unverified-in-this-session; its Theorem 9 is
+used only as a structural template, explicitly not as an established
+bound. This audit is still not a substitute for external cryptographic
+review.
 
 ## Verdicts
 
 | Property | Verdict | Basis |
 |---|---|---|
 | Prototype correctness (honest path works; malformed/tampered proofs rejected as implemented) | **GO** | E2E tests pass; every message/check traced prover↔verifier; no logic defect found (findings F3–F8 are non-blocking) |
-| Interactive soundness | **CONDITIONAL** | Check structure matches the paper's mechanism; bound transfer blocked by F1 (DECS-variant deviation needs re-derivation) and unproven τ-composition |
+| Interactive soundness | **CONDITIONAL** | Check structure matches the paper's mechanism; DECS term re-established for the as-built combination (F1 resolution: variant lemma, same numerical term); composed per-repetition write-up + τ-composition still unproven |
 | Classical-ROM (Fiat–Shamir) security | **NO-GO** | No extractor accounting for this transcript; no KZ-aware τ proof (F2) |
 | QROM security | **NO-GO** | No applicable result (DFMS19 is 3-round-only); correctly unclaimed |
 | Proof of knowledge | **NO-GO** | No extractor; correctly unclaimed |
@@ -61,15 +58,16 @@ as the paper requires.
 
 ## Findings (ordered by severity)
 
-### F1 [Medium] — DECS combination deviates from FR25b Eq. 14; Theorem 1/2 do not transfer verbatim
+### F1 [Medium] — DECS combination deviates from FR25b Eq. 14 (resolved Phase 6: different but sound)
 
-Paper construction (per the documented header, `decs.rs:1-30`): `Pξ = Γ·Q + Pu`,
-mask added with coefficient 1. Implementation (`prover.rs:201-217`,
+Paper construction (verified JoC revision): `Pξ = Γ·Q + Pu` (Eq. 15),
+mask added with coefficient 1, `Q` plain concatenation (Eq. 14, no
+shifts). Implementation (`prover.rs:201-217`,
 `verifier.rs:345-361`): `Pξ_k = Σ_q Γ[k][q]·Q̃_q` over ALL committed columns
-including the `η` mask packs — no standalone `Pu` term. The Q-shift
-convention likewise follows the stated word-rule (`X^{dβ−deg}`,
-`prover.rs:149,154,170`, `verifier.rs:212-223`) rather than the printed
-Eq. 13 exponent; the print-claim itself is unverifiable-in-this-session.
+including the `η` mask packs — no standalone `Pu` term — with `X`-shifts
+on sub-maximal tail-hint columns. See F1 resolution below; the pre-Phase-6
+"printed Eq. 13 exponent" note is withdrawn (that text is absent from the
+JoC revision).
 
 Why medium, not high: the detection mechanism the bound actually uses is
 fully preserved — `h1'` pre-commitment before `I` is sampled
@@ -87,6 +85,63 @@ powering, not a proven parallel-repetition statement for this transcript.
 Reproduction: code reading suffices (compare `prover.rs:207-217` with the
 documented Eq. 14). Honest execution is unaffected (both sides compute the
 same function; e2e passes).
+
+#### F1 resolution (Phase 6): different but sound — no code change
+
+Primary source obtained (FR25b eprint PDF via Wayback snapshot
+2025-12-09, JoC version). Verified: Eq. 13 is the basic `JξK` relation
+(no shifts); Eq. 14 is plain concatenation `Q := Pw|Pβ1|…` (NO
+degree-alignment shifts anywhere in the revision); Eq. 15 is
+`Pξ := Γ·Q + Pu` with `Pu` at coefficient 1; Theorem 1 gives
+`C(N,d+2)/|F|^η` with the per-row `≤ 1/|F|` drop argument; Theorem 2 /
+Eq. 16 gives the MT bound with the `C(N,dβ+2)/|F|^η` term; Lemma 1,
+Π0 (`×P0`), ΠΣ0 (`Δu1` + Lagrange correction per footnote 10), Protocol 5
+message order / `S` sizes / hash-equality checks, §6.4 ΠLigero
+(`m1`/`m2`/degrees), Eq. 18 size formula, and the KZ selection rules all
+match the implementation's structure. The earlier "word-rule vs printed
+Eq. 13" note described text absent from this revision and is withdrawn
+(see `V3_PROTOCOL.md` §1b).
+
+Algebraic comparison. For each committed column `q` with N-point
+interpolant `P_q`, the implementation uses the effective column
+`Q̃_q(X) := X^{shift_q}·P_q(X)` (`shift_q = 0` for witness/mask/full-degree
+hints, `shift_q = dβ − deg_claimed` for the two short Π$ tails) and
+responds `Pξ_k = Σ_q Γ_{kq}·Q̃_q` — i.e. the paper's construction with
+(i) `Pu` absorbed as Γ-weighted columns and (ii) sub-maximal columns
+shifted up to exactly `dβ`.
+
+Variant DECS lemma (as-implemented combination). If
+`max_q deg Q̃_q > dβ` then the DECS part accepts with probability at most
+`C(N,dβ+2)/|F|^η` (plus hash-collision probability) — the identical
+numerical term as Theorem 1. Proof sketch, adapting FR25b Theorem 1
+Eqs. 7–9 (verified above): fix the commitment (hence all `Q̃_q`); for each
+`E ⊂ [N]`, `|E| = dβ+2`, call `E` bad if some column interpolant through
+`E` exceeds `dβ` (`≤ C(N,dβ+2)` such sets); for fixed bad `E` with nonzero
+leading-coefficient vector, row `k` drops degree only if `Γ_k` lies in a
+proper hyperplane — probability exactly `≤ 1/|F|` over uniform `Γ_k`
+(mask columns are just more coordinates; the paper's coefficient-1 mask
+is the special case where cancellation is impossible rather than
+improbable — a fortiori covered); rows independent → `≤ |F|^−η` per bad
+`E`; union bound gives the term. Shifts are monic, preserving leading
+coefficients, and only make the check strictly stronger (a tail column is
+held to its claimed degree, not just the uniform cap). Acceptance via a
+pre-committed `h1'` matching the `Sξ∪I` interpolant is enclosed by the
+same bad-`E` event up to hash collisions (same reduction structure as the
+paper's §5 step). ∎-sketch.
+
+Consequences: the interactive bound's DECS term transfers with unchanged
+value; the FP term (`1/|F|^ρ`, identical batching) and threshold term
+(`C(dα,ℓ)/C(N,ℓ)`, identical checks/set sizes) use only the `¬DEF`
+consequence (valid sharings of degree `≤ dβ`), which the lemma supplies.
+The padding-lane analysis is unaffected. No code change is justified:
+removing shifts or re-introducing standalone `Pu` would be churn with no
+security benefit (the remaining mask-form deviation persists either way
+and is covered by the lemma).
+
+F1 verdict evolution: the transfer question is answered for the DECS
+term. Interactive soundness stays CONDITIONAL: the composed
+per-repetition write-up and τ-composition proof are still required
+before any claim (narrowed from the original F1).
 
 ### F2 [Medium] — No ROM-FS accounting exists for this exact transcript; KZ-aware τ selection unproven
 
@@ -194,20 +249,21 @@ birthday ceiling `2^126.80`). Interactive per-repetition bound
 
 Assumptions the table depends on (all unproven for the as-built
 transcript): ROM BLAKE3/XOF; PRG hiding; Merkle binding; Poseidon2
-external; `N < |F|`; DECS-variant bound transfer (F1); τ-composition
-(F2); straightline extraction; classical-only scope. The `Q·ε` column is
-template arithmetic, not a bound. Collision floor `≈ Q²/2^{2λ} ≈ 2^{−128}`
+external; `N < |F|`; composed per-repetition write-up + τ-composition
+(F1-resolution lemma covers only the DECS term); straightline
+extraction; classical-only scope. The `Q·ε` column is template
+arithmetic, not a bound. Collision floor `≈ Q²/2^{2λ} ≈ 2^{−128}`
 per round oracle (classical) is consistent with the ≈127-bit field
 ceiling; nothing may target `2^{−128}`.
 
 ## Fixes and proofs required before any security claim
 
-1. Write the Theorem-1-style DECS argument for the as-implemented
-   `Pξ` (mask-in-Γ combination, word-rule shifts) — expected to mirror
-   the paper proof; then instantiate Theorem 2 for our LPPC parameters
-   (F1).
-2. Write the τ-repetition composition and KZ-aware selection proof for
-   the exact `Γ → (γ,γ') → I` transcript (F2).
+1. Write the composed per-repetition interactive argument for the
+   as-built transcript (FP + threshold/special-soundness terms on top of
+   the Phase 6 DECS lemma) and instantiate it for our LPPC parameters;
+   then the τ-repetition composition (narrowed remainder of F1).
+2. Write the KZ-aware τ-selection proof for the exact
+   `Γ → (γ,γ') → I` transcript (F2).
 3. Write the classical-ROM straightline-extractor ledger (per-round
    `Qi·εi`, digest-size collision term) or restrict scope explicitly;
    decide grinding (`κi`) with size-equation update (F2).

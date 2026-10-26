@@ -230,7 +230,7 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
   all open. Not secure, not zero-knowledge, not 127-bit.
 - V2 code/tests/docs unchanged; pre-existing `fixes.md` deletion and
   untracked files preserved; nothing pushed.
-## P6.1 — verify DECS source equations (`pending hash`)
+## P6.1 — verify DECS source equations (`77869e4`)
 
 - Obtained an authoritative FR25b copy (eprint PDF via Wayback snapshot
   2025-12-09; JoC version) after the audit-phase retrieval failures.
@@ -247,3 +247,19 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
   `X`-shifts are an implementation-side conservative strengthening.
   `V3_PROTOCOL.md` corrected (rows 2–3, check 3, new §1b deviations).
 - Next step: P6.2 variant DECS lemma + decision.
+## P6.2 — DECS variant lemma + decision (`pending hash`)
+
+- Wrote the algebraic comparison (paper `Pξ = Γ·Q + Pu`, plain-concat
+  Eq. 14, no shifts anywhere in the JoC revision vs implemented
+  mask-in-Γ plus `X`-shifted tail columns) and a variant DECS lemma
+  adapting Theorem 1 Eqs. 7–9: same `C(N,dβ+2)/|F|^η` term; shifts
+  preserve leading coefficients and only strengthen the per-column cap;
+  mask folding is covered by the same union bound (paper's coefficient-1
+  mask is the a-fortiori special case).
+- Decision recorded in `V3_AUDIT.md` F1 resolution: different but sound,
+  no code change (removing shifts / re-adding standalone `Pu` is churn
+  with no security benefit). F1 transfer question answered for the DECS
+  term; interactive soundness stays CONDITIONAL (composed per-rep
+  write-up + τ-composition still required).
+- Validation: primary-source equations re-checked line by line; no code
+  touched (only docs).
