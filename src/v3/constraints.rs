@@ -29,6 +29,7 @@
 use std::collections::BTreeMap;
 
 use ark_bn254::Fr;
+use ark_ff::Zero;
 
 use crate::v2::circuit::{CircuitV2, GateV2, Wire};
 use crate::v3::matrix::{pack_witness, unpack_matrix, MatrixDims};
@@ -298,10 +299,13 @@ impl ConstraintProgramV3 {
     /// (degree ≤ `s−1`) for the inner-product evaluation
     /// `Jb_j = ⟨JA_j, Jw⟩` (FR25b §6.3): pack `p`'s polynomial interpolates
     /// that constraint's lane coefficients (zero at unused lanes).
+    ///
+    /// The lane points are identical for every constraint and pack, so the
+    /// Vandermonde inverse is computed once and reused (O(s²) per
+    /// interpolation instead of O(s³)).
     pub fn linear_pack_polys(&self) -> Result<Vec<Vec<(usize, Vec<Fr>)>>> {
-        use crate::v3::sharing::{coord_point, interpolate_coeffs};
         let s = self.dims.num_cols;
-        let omega: Vec<Fr> = (0..s).map(coord_point).collect();
+        let interpolator = self.lane_interpolator()?;
         self.linear_constraints
             .iter()
             .map(|constraint| {
@@ -313,11 +317,56 @@ impl ConstraintProgramV3 {
                 by_pack
                     .into_iter()
                     .map(|(pack, lane_values)| {
-                        interpolate_coeffs(&omega, &lane_values).map(|poly| (pack, poly))
+                        interpolator.interpolate(&lane_values).map(|poly| (pack, poly))
                     })
                     .collect()
             })
             .collect()
+    }
+
+    /// Precomputed interpolation transform for the secret-coordinate lane
+    /// points `ω` shared by every constraint of this program.
+    pub fn lane_interpolator(&self) -> Result<crate::v3::sharing::FixedInterpolator> {
+        use crate::v3::sharing::{coord_point, FixedInterpolator};
+        let s = self.dims.num_cols;
+        FixedInterpolator::new(&(0..s).map(coord_point).collect::<Vec<Fr>>())
+    }
+
+    /// Evaluate every `Jb_j` at one party directly from sparse lane
+    /// coefficients, without building per-constraint polynomials:
+    /// `Jb_j = Σ_terms coeff·L_lane(e)·pack_value[pack]`, where `lane_basis`
+    /// holds the Lagrange weights `L_lane(e)` (see
+    /// [`crate::v3::sharing::FixedInterpolator::basis_evals`]) and
+    /// `pack_values[pack]` is that pack's witness share at the party.
+    ///
+    /// Mathematically identical to evaluating [`Self::linear_pack_polys`]
+    /// output at `e` (exact field arithmetic); cost is proportional to the
+    /// number of nonzero terms rather than `m2·packs·s`.
+    pub fn eval_linear_jb_sparse(
+        &self,
+        lane_basis: &[Fr],
+        pack_values: &[Fr],
+    ) -> Result<Vec<Fr>> {
+        let s = self.dims.num_cols;
+        if lane_basis.len() != s {
+            return Err(MpcithError::InvalidParams(format!(
+                "v3 sparse LPPC evaluation needs {s} lane basis weights"
+            )));
+        }
+        let mut out = vec![Fr::zero(); self.linear_constraints.len()];
+        for (j, constraint) in self.linear_constraints.iter().enumerate() {
+            let mut acc = Fr::zero();
+            for (index, coefficient) in &constraint.terms {
+                let pack = index / s;
+                let lane = index % s;
+                let w = pack_values.get(pack).ok_or_else(|| {
+                    MpcithError::InvalidParams("v3 sparse LPPC pack index out of range".into())
+                })?;
+                acc += *coefficient * lane_basis[lane] * *w;
+            }
+            out[j] = acc;
+        }
+        Ok(out)
     }
 
     /// Build the extended witness matrix for any private input vector.
@@ -597,6 +646,51 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn sparse_jb_evaluation_matches_pack_polys() {
+        use crate::v3::sharing::{coord_point, eval_poly, party_point};
+        use ark_ff::{One, UniformRand};
+        let mut rng = StdRng::seed_from_u64(0x5163_5052);
+        let mut builder = crate::v2::circuit::CircuitBuilderV2::new(2);
+        let sum = builder.add(Wire(0), Wire(1));
+        let product = builder.mul(sum, Wire(1));
+        let shifted = builder.add_const(product, Fr::from(3u64));
+        builder.assert_eq(shifted, Fr::from(11u64));
+        let circuit = builder.build();
+        let program =
+            ConstraintProgramV3::compile(&circuit, &V3Params::fast_insecure_test()).unwrap();
+        let s = program.dims().num_cols;
+        let pack_polys = program.linear_pack_polys().unwrap();
+        let interpolator = program.lane_interpolator().unwrap();
+        // Random witness-share values per pack row.
+        let n_rows = program.dims().num_rows;
+        let pack_values: Vec<Fr> = (0..n_rows).map(|_| Fr::rand(&mut rng)).collect();
+        for point in [
+            coord_point(0),
+            coord_point(s - 1),
+            party_point(s, 0),
+            party_point(s, 7),
+            Fr::rand(&mut rng),
+        ] {
+            let basis = interpolator.basis_evals(point);
+            let sparse = program
+                .eval_linear_jb_sparse(&basis, &pack_values)
+                .unwrap();
+            assert_eq!(sparse.len(), program.m2());
+            for (j, polys) in pack_polys.iter().enumerate() {
+                let mut dense = Fr::zero();
+                for (pack, poly) in polys {
+                    dense += eval_poly(poly, point) * pack_values[*pack];
+                }
+                assert_eq!(sparse[j], dense, "sparse/dense mismatch at constraint {j}");
+            }
+        }
+        // Wrong basis length is rejected.
+        assert!(program
+            .eval_linear_jb_sparse(&vec![Fr::one(); s + 1], &pack_values)
+            .is_err());
     }
 
     #[test]

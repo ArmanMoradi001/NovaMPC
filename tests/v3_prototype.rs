@@ -247,3 +247,44 @@ fn tampered_proof_bytes_reject() {
     parsed.reps[0].broadcast_hash[1] ^= 1;
     assert!(verify_combined_v3(&parsed, &statement, context, &params).is_err());
 }
+
+#[test]
+fn tampered_broadcast_shares_reject() {
+    // Regression test for the optimized verifier LPPC path (sparse lane
+    // evaluation + fast interpolation): honest proofs verify, and tampering
+    // with the broadcast shares in either repetition is caught by the
+    // recomputed broadcast checks.
+    let tree = small_tree();
+    let params = tau2_small_params();
+    let proof_tx = tree.prove_membership(1).unwrap();
+    let context = [7u8; 32];
+    let proof = prove_combined_v3(
+        10, 40, tree.root(), tree.num_members(), tree.depth(), 20, &proof_tx, context, &params,
+        &mut rng(),
+    )
+    .unwrap();
+    let statement = mpcith_zk::v2::predicate::StatementV2::Combined {
+        range: mpcith_zk::v2::predicate::RangeStatementV2::new(10, 40).unwrap(),
+        membership: mpcith_zk::v2::predicate::MembershipStatementV2::new(
+            tree.root(),
+            tree.num_members(),
+            tree.depth(),
+        )
+        .unwrap(),
+    };
+    verify_combined_v3(&proof, &statement, context, &params).unwrap();
+    for rep in 0..proof.reps.len() {
+        let mut bad = proof.clone();
+        bad.reps[rep].broadcast_alpha[0][0] += Fr::from(1u64);
+        assert!(
+            verify_combined_v3(&bad, &statement, context, &params).is_err(),
+            "tampered broadcast share accepted in rep {rep}"
+        );
+        let mut bad = proof.clone();
+        bad.reps[rep].broadcast_alpha_prime[0][0] += Fr::from(1u64);
+        assert!(
+            verify_combined_v3(&bad, &statement, context, &params).is_err(),
+            "tampered prime broadcast share accepted in rep {rep}"
+        );
+    }
+}

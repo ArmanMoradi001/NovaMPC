@@ -16,7 +16,7 @@ use crate::v3::hints::{correction_basis_eval, zero_mask_eval, PiDollarV3};
 use crate::v3::params::V3Params;
 use crate::v3::proof::V3Proof;
 use crate::v3::prover::complement_set;
-use crate::v3::sharing::{interpolate_coeffs, party_point};
+use crate::v3::sharing::{interpolate_coeffs_fast, party_point, FixedInterpolator};
 use crate::v3::transcript::{
     circuit_hash_v3, hash_fr_vecs, TranscriptV3, V3_HASH_TAG_BROADCAST, V3_HASH_TAG_PXI,
     V3_TR_TAG_BATCH, V3_TR_TAG_GAMMA, V3_TR_TAG_OPEN,
@@ -97,7 +97,9 @@ pub fn verify_combined_v3(
     let pi_vp = PiDollarV3::for_target(s, ell, d_beta, d2)?;
     let n_hints = pi_v.num_hints + pi_vp.num_hints;
     let num_q = n_w + eta + rho * n_hints;
-    let pack_polys = program.linear_pack_polys()?;
+    // Lane interpolation transform shared by all repetitions: the LPPC lane
+    // points are fixed, so invert once instead of per-constraint.
+    let lane_interp = program.lane_interpolator()?;
 
     if proof.reps.len() != params.pok_reps as usize {
         return Err(MpcithError::VerificationFailed(format!(
@@ -109,7 +111,7 @@ pub fn verify_combined_v3(
 
     for (rep_index, rep) in proof.reps.iter().enumerate() {
         verify_rep(
-            rep, &program, &pack_polys, params, s, ell, n, eta, rho,
+            rep, &program, &lane_interp, params, s, ell, n, eta, rho,
             d_beta, d_alpha, d2, n_w, m1, num_q, n_hints,
             &pi_v, &pi_vp, &context, &circuit_hash, &proof.salt,
             lo, hi, &proof.set_root, num_members, depth,
@@ -123,7 +125,7 @@ pub fn verify_combined_v3(
 fn verify_rep(
     rep: &crate::v3::proof::RepProofV3,
     program: &ConstraintProgramV3,
-    pack_polys: &[Vec<(usize, Vec<Fr>)>],
+    lane_interp: &FixedInterpolator,
     params: &V3Params,
     s: usize, ell: usize, n: usize, eta: usize, rho: usize,
     d_beta: usize, d_alpha: usize, d2: usize, n_w: usize, m1: usize,
@@ -271,16 +273,20 @@ fn verify_rep(
             }
             alpha_i.push(acc);
         }
+        // Sparse LPPC path: lane Lagrange weights at this opened party,
+        // shared by all constraints; cost scales with nonzero terms.
+        let lane_bases: Vec<Vec<Fr>> = opened_idx
+            .iter()
+            .map(|i| lane_interp.basis_evals(party_point(s, *i as usize)))
+            .collect();
         let mut alpha_p_i = Vec::with_capacity(ell);
         for k in 0..ell {
-            let e = party_point(s, opened_idx[k] as usize);
+            let pack_values: Vec<Fr> =
+                (0..n_w).map(|pack| w_at(pack, k)).collect();
+            let jb = program.eval_linear_jb_sparse(&lane_bases[k], &pack_values)?;
             let mut acc = jvp[k];
-            for (j, polys) in pack_polys.iter().enumerate() {
-                let mut jb = Fr::zero();
-                for (pack, poly) in polys {
-                    jb += crate::v3::sharing::eval_poly(poly, e) * w_at(*pack, k);
-                }
-                acc += gamma_ps[b][j] * jb;
+            for (jb_j, gp_j) in jb.iter().zip(gamma_ps[b].iter()) {
+                acc += *gp_j * *jb_j;
             }
             alpha_p_i.push(acc);
         }
@@ -302,8 +308,8 @@ fn verify_rep(
             pts_p.push(party_point(s, *idx));
             vals_p.push(*v);
         }
-        let poly_a = interpolate_coeffs(&pts_a, &vals_a).map_err(|e| fail(&format!("v3 {e}")))?;
-        let poly_p = interpolate_coeffs(&pts_p, &vals_p).map_err(|e| fail(&format!("v3 {e}")))?;
+        let poly_a = interpolate_coeffs_fast(&pts_a, &vals_a).map_err(|e| fail(&format!("v3 {e}")))?;
+        let poly_p = interpolate_coeffs_fast(&pts_p, &vals_p).map_err(|e| fail(&format!("v3 {e}")))?;
         // Canonical shares must reproduce hB.
         let canon_a: Vec<Fr> = (0..d_alpha + 1)
             .map(|i| crate::v3::sharing::eval_poly(&poly_a, party_point(s, i)))
@@ -366,7 +372,7 @@ fn verify_rep(
             vals.push(rep.decs_responses[k][j]);
         }
         pxi_coeffs
-            .push(interpolate_coeffs(&pts, &vals).map_err(|e| fail(&format!("v3 {e}")))?);
+            .push(interpolate_coeffs_fast(&pts, &vals).map_err(|e| fail(&format!("v3 {e}")))?);
     }
     if hash_fr_vecs(V3_HASH_TAG_PXI, &pxi_coeffs) != rep.decs_hash {
         return Err(fail("v3 DECS hash mismatch"));

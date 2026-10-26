@@ -28,7 +28,7 @@ use crate::v3::hints::{
 };
 use crate::v3::params::V3Params;
 use crate::v3::proof::{OpenedPartyV3, RepProofV3, V3Proof};
-use crate::v3::sharing::{eval_poly, interpolate_coeffs, party_point, share};
+use crate::v3::sharing::{eval_poly, interpolate_coeffs_fast, party_point, share};
 use crate::v3::transcript::{
     circuit_hash_v3, hash_fr_vecs, TranscriptV3, V3_HASH_TAG_BROADCAST, V3_HASH_TAG_PXI,
     V3_TR_TAG_BATCH, V3_TR_TAG_GAMMA, V3_TR_TAG_OPEN,
@@ -218,13 +218,23 @@ fn prove_rep(
             })
             .collect();
         let pts: Vec<Fr> = canon_d.iter().map(|i| party_point(s, *i)).collect();
-        pxi_coeffs.push(interpolate_coeffs(&pts, &evals)?);
+        pxi_coeffs.push(interpolate_coeffs_fast(&pts, &evals)?);
     }
     let h1p = hash_fr_vecs(V3_HASH_TAG_PXI, &pxi_coeffs);
     tr.absorb_hash(b"h1p", &h1p);
 
     // --- 4-5. Batching challenges, broadcasts, hB. ---
-    let pack_polys = program.linear_pack_polys()?;
+    // Sparse LPPC path: lane Lagrange basis weights per canonical party,
+    // shared by all batches. Per-batch cost scales with the number of
+    // nonzero constraint terms rather than constraint·pack·s polynomial
+    // evaluations; the result is mathematically identical (exact field
+    // arithmetic), so proof bytes are unchanged.
+    let lane_interp = program.lane_interpolator()?;
+    let canon_ap: Vec<usize> = (0..d2 + 1).collect();
+    let ap_bases: Vec<Vec<Fr>> = canon_ap
+        .iter()
+        .map(|i| lane_interp.basis_evals(party_point(s, *i)))
+        .collect();
     let mut batch_alpha: Vec<Vec<Fr>> = Vec::new(); // canonical JαK shares
     let mut batch_alpha_p: Vec<Vec<Fr>> = Vec::new();
     for (b, commit) in batch_commits.iter().enumerate() {
@@ -248,11 +258,18 @@ fn prove_rep(
             .iter()
             .map(|i| broadcast_alpha_at(program, &q_shares[..n_w], &jv, &g, *i))
             .collect::<Result<Vec<Fr>>>()?;
-        let canon_ap: Vec<usize> = (0..d2 + 1).collect();
         let alpha_p: Vec<Fr> = canon_ap
             .iter()
-            .map(|i| {
-                broadcast_alpha_prime_at(&pack_polys, &q_shares[..n_w], &jvp, &gp, s, *i)
+            .enumerate()
+            .map(|(k, i)| {
+                let pack_values: Vec<Fr> =
+                    q_shares[..n_w].iter().map(|col| col[*i]).collect();
+                let jb = program.eval_linear_jb_sparse(&ap_bases[k], &pack_values)?;
+                let mut acc = jvp[*i];
+                for (jb_j, gp_j) in jb.iter().zip(gp.iter()) {
+                    acc += *gp_j * *jb_j;
+                }
+                Ok(acc)
             })
             .collect::<Result<Vec<Fr>>>()?;
         batch_alpha.push(alpha);
@@ -277,11 +294,11 @@ fn prove_rep(
     let mut s_alpha: Vec<Vec<Fr>> = Vec::new();
     let mut s_alpha_p: Vec<Vec<Fr>> = Vec::new();
     for (a, ap) in batch_alpha.iter().zip(batch_alpha_p.iter()) {
-        let pa = interpolate_coeffs(
+        let pa = interpolate_coeffs_fast(
             &(0..d_alpha + 1).map(|i| party_point(s, i)).collect::<Vec<Fr>>(),
             a,
         )?;
-        let pap = interpolate_coeffs(
+        let pap = interpolate_coeffs_fast(
             &(0..d2 + 1).map(|i| party_point(s, i)).collect::<Vec<Fr>>(),
             ap,
         )?;
@@ -346,28 +363,6 @@ fn broadcast_alpha_at(
         let b = wshares[group.b_row][party];
         let c = wshares[group.c_row][party];
         acc += gamma[g] * (c - a * b);
-    }
-    Ok(acc)
-}
-
-/// `Jα′K_i = Jv′K_i + Σ_j γ′_j·Jb_j,i` at party `i`, with
-/// `Jb_j,i = Σ_p JA_j(p)(e_i)·w_{p,i}` (Protocol 8 step 5, §6.3).
-fn broadcast_alpha_prime_at(
-    pack_polys: &[Vec<(usize, Vec<Fr>)>],
-    wshares: &[Vec<Fr>],
-    jvp: &[Fr],
-    gamma_p: &[Fr],
-    s: usize,
-    party: usize,
-) -> Result<Fr> {
-    let e = party_point(s, party);
-    let mut acc = jvp[party];
-    for (j, polys) in pack_polys.iter().enumerate() {
-        let mut jb = Fr::zero();
-        for (pack, poly) in polys {
-            jb += eval_poly(poly, e) * wshares[*pack][party];
-        }
-        acc += gamma_p[j] * jb;
     }
     Ok(acc)
 }

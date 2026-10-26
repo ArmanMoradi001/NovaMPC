@@ -123,6 +123,188 @@ pub fn interpolate_coeffs(points: &[Fr], values: &[Fr]) -> Result<Vec<Fr>> {
     Ok((0..n).map(|i| mat[i][n]).collect())
 }
 
+/// Interpolate the coefficient form of the unique degree-`<n` polynomial
+/// through `(points, values)` in O(n²) field operations via the vanishing
+/// polynomial and synthetic division.
+///
+/// Mathematically identical to [`interpolate_coeffs`] (finite-field
+/// arithmetic is exact, so evaluation order cannot change the result); use
+/// on prover/verifier hot paths with hundreds of points where the
+/// Gaussian-elimination reference is cubic.
+pub fn interpolate_coeffs_fast(points: &[Fr], values: &[Fr]) -> Result<Vec<Fr>> {
+    if points.len() != values.len() || points.is_empty() {
+        return Err(MpcithError::InvalidParams(
+            "v3 interpolation needs non-empty equal-length points/values".into(),
+        ));
+    }
+    let n = points.len();
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if points[i] == points[j] {
+                return Err(MpcithError::InvalidParams(
+                    "v3 interpolation points must be distinct".into(),
+                ));
+            }
+        }
+    }
+    // V(X) = ∏(X − x_i), ascending coefficients.
+    let mut vanishing = vec![Fr::one()];
+    for x in points {
+        let mut next = vec![Fr::zero(); vanishing.len() + 1];
+        for (d, c) in vanishing.iter().enumerate() {
+            next[d] -= *c * *x;
+            next[d + 1] += *c;
+        }
+        vanishing = next;
+    }
+    // P(X) = Σᵢ yᵢ·V(X)/((X − xᵢ)·V′(xᵢ)); each quotient via synthetic
+    // division in O(n).
+    let mut coeffs = vec![Fr::zero(); n];
+    for (x, y) in points.iter().zip(values.iter()) {
+        let mut quotient = vec![Fr::zero(); n];
+        quotient[n - 1] = vanishing[n];
+        for k in (0..n - 1).rev() {
+            quotient[k] = vanishing[k + 1] + quotient[k + 1] * *x;
+        }
+        let denom = eval_poly(&quotient, *x);
+        let denom_inv = denom.inverse().ok_or_else(|| {
+            MpcithError::InvalidParams("v3 interpolation hit zero denominator".into())
+        })?;
+        let weight = *y * denom_inv;
+        for (c, q) in coeffs.iter_mut().zip(quotient.iter()) {
+            *c += weight * *q;
+        }
+    }
+    Ok(coeffs)
+}
+
+/// Precomputed interpolation transform for one fixed set of distinct points.
+///
+/// Inverting the Vandermonde matrix once (cubic) reduces every later
+/// interpolation at the same points to an O(n²) matrix-vector product.
+/// Used for the secret-coordinate (`ω`) points, which are identical for
+/// every LPPC constraint of a program.
+#[derive(Debug, Clone)]
+pub struct FixedInterpolator {
+    n: usize,
+    /// `inv[t][i]`: coefficient of `X^t` in the Lagrange basis `L_i`.
+    inv: Vec<Vec<Fr>>,
+}
+
+impl FixedInterpolator {
+    /// Precompute the transform for `points` (must be non-empty, distinct).
+    pub fn new(points: &[Fr]) -> Result<Self> {
+        if points.is_empty() {
+            return Err(MpcithError::InvalidParams(
+                "v3 fixed interpolator needs non-empty points".into(),
+            ));
+        }
+        let n = points.len();
+        for i in 0..n {
+            for j in (i + 1)..n {
+                if points[i] == points[j] {
+                    return Err(MpcithError::InvalidParams(
+                        "v3 interpolation points must be distinct".into(),
+                    ));
+                }
+            }
+        }
+        // Invert V[i][j] = x_i^j by Gauss-Jordan on [V | I].
+        let mut mat = vec![vec![Fr::zero(); 2 * n]; n];
+        for (i, x) in points.iter().enumerate() {
+            let mut pow = Fr::one();
+            for j in 0..n {
+                mat[i][j] = pow;
+                pow *= *x;
+            }
+            mat[i][n + i] = Fr::one();
+        }
+        for col in 0..n {
+            let mut pivot = None;
+            for row in col..n {
+                if !mat[row][col].is_zero() {
+                    pivot = Some(row);
+                    break;
+                }
+            }
+            let pivot = pivot.ok_or_else(|| {
+                MpcithError::InvalidParams("v3 interpolation matrix is singular".into())
+            })?;
+            mat.swap(col, pivot);
+            let inv = mat[col][col].inverse().ok_or_else(|| {
+                MpcithError::InvalidParams("v3 interpolation hit zero pivot".into())
+            })?;
+            for j in 0..2 * n {
+                mat[col][j] *= inv;
+            }
+            for row in 0..n {
+                if row != col && !mat[row][col].is_zero() {
+                    let factor = mat[row][col];
+                    let pivot_row = mat[col].clone();
+                    for j in 0..2 * n {
+                        mat[row][j] -= factor * pivot_row[j];
+                    }
+                }
+            }
+        }
+        // V⁻¹[t][i] = mat[t][n + i]: coeffs[t] = Σᵢ V⁻¹[t][i]·yᵢ.
+        let mut inv = vec![vec![Fr::zero(); n]; n];
+        for t in 0..n {
+            for i in 0..n {
+                inv[t][i] = mat[t][n + i];
+            }
+        }
+        Ok(Self { n, inv })
+    }
+
+    /// Number of interpolation points.
+    pub fn num_points(&self) -> usize {
+        self.n
+    }
+
+    /// Interpolate `values` at the fixed points in O(n²).
+    pub fn interpolate(&self, values: &[Fr]) -> Result<Vec<Fr>> {
+        if values.len() != self.n {
+            return Err(MpcithError::InvalidParams(format!(
+                "v3 fixed interpolation needs {} values, got {}",
+                self.n,
+                values.len()
+            )));
+        }
+        Ok((0..self.n)
+            .map(|t| {
+                self.inv[t]
+                    .iter()
+                    .zip(values.iter())
+                    .map(|(m, y)| *m * *y)
+                    .sum()
+            })
+            .collect())
+    }
+
+    /// Evaluate the full Lagrange basis at `x`: `out[i] = L_i(x)` in O(n²).
+    ///
+    /// Lets callers evaluate sparse lane polynomials without building them:
+    /// `P(x) = Σᵢ yᵢ·Lᵢ(x)` for lane values `yᵢ`.
+    pub fn basis_evals(&self, x: Fr) -> Vec<Fr> {
+        let mut powers = vec![Fr::zero(); self.n];
+        let mut pow = Fr::one();
+        for t in 0..self.n {
+            powers[t] = pow;
+            pow *= x;
+        }
+        (0..self.n)
+            .map(|i| {
+                self.inv
+                    .iter()
+                    .zip(powers.iter())
+                    .map(|(row, p)| row[i] * *p)
+                    .sum()
+            })
+            .collect()
+    }
+}
+
 /// Check `deg P ≤ max_degree` for the polynomial through `(points, values)`.
 /// Needs at least `max_degree + 2` points to detect excess degree.
 pub fn degree_within_bound(points: &[Fr], values: &[Fr], max_degree: usize) -> Result<bool> {
@@ -157,7 +339,8 @@ pub fn share(s: usize, ell: usize, num_parties: usize, secret: &[Fr], randomness
     }
     let omega: Vec<Fr> = (0..s).map(coord_point).collect();
     // I_v: degree-(s-1) interpolation of the secret at the coordinates.
-    let iv = interpolate_coeffs(&omega, secret)?;
+    // O(s²) Lagrange path; identical result to the cubic reference.
+    let iv = interpolate_coeffs_fast(&omega, secret)?;
     // F(X) = prod (X - w_k), degree s.
     let mut f = vec![Fr::one()];
     for w in &omega {
@@ -297,6 +480,79 @@ mod tests {
         let points: Vec<(Fr, Fr)> = (0..n).map(|i| (party_point(s, i), shares[i])).collect();
         let recovered = reconstruct(s, ell, &points).unwrap();
         assert_ne!(recovered, secret);
+    }
+
+    #[test]
+    fn fast_interpolation_matches_reference() {
+        use ark_ff::UniformRand;
+        let mut rng = test_rng();
+        for n in [1usize, 2, 5, 30, 120] {
+            let points: Vec<Fr> = (0..n).map(|_| Fr::rand(&mut rng)).collect();
+            // Rejection-sample distinct points.
+            let mut distinct = points.clone();
+            for i in 0..n {
+                while distinct[..i].contains(&distinct[i]) {
+                    distinct[i] = Fr::rand(&mut rng);
+                }
+            }
+            let values: Vec<Fr> = (0..n).map(|_| Fr::rand(&mut rng)).collect();
+            let expected = interpolate_coeffs(&distinct, &values).unwrap();
+            let got = interpolate_coeffs_fast(&distinct, &values).unwrap();
+            assert_eq!(got, expected, "fast interpolation mismatch at n={n}");
+            // Interpolant reproduces the values.
+            for (x, y) in distinct.iter().zip(values.iter()) {
+                assert_eq!(eval_poly(&got, *x), *y);
+            }
+            // Error cases match the reference.
+            assert!(interpolate_coeffs_fast(&[], &[]).is_err());
+            if n > 1 {
+                assert!(interpolate_coeffs_fast(&distinct[..1], &values).is_err());
+            }
+        }
+        // Duplicate points are rejected.
+        let dup = vec![Fr::one(), Fr::one()];
+        let vals = vec![Fr::one(), Fr::one()];
+        assert!(interpolate_coeffs_fast(&dup, &vals).is_err());
+    }
+
+    #[test]
+    fn fixed_interpolator_matches_reference() {
+        use ark_ff::UniformRand;
+        let mut rng = test_rng();
+        for n in [1usize, 2, 8, 120] {
+            let points: Vec<Fr> = (0..n).map(|i| coord_point(i * 3 + 1)).collect();
+            let interp = FixedInterpolator::new(&points).unwrap();
+            assert_eq!(interp.num_points(), n);
+            for _ in 0..3 {
+                let values: Vec<Fr> = (0..n).map(|_| Fr::rand(&mut rng)).collect();
+                let expected = interpolate_coeffs(&points, &values).unwrap();
+                assert_eq!(interp.interpolate(&values).unwrap(), expected);
+                // Basis evaluation agrees with the interpolant.
+                let x = Fr::rand(&mut rng);
+                let basis = interp.basis_evals(x);
+                assert_eq!(basis.len(), n);
+                let via_basis: Fr = values
+                    .iter()
+                    .zip(basis.iter())
+                    .map(|(y, l)| *y * *l)
+                    .sum();
+                assert_eq!(via_basis, eval_poly(&expected, x));
+            }
+            // Basis is Lagrange: L_i(x_j) = δ_ij, and weights sum to 1.
+            for (j, x) in points.iter().enumerate() {
+                let basis = interp.basis_evals(*x);
+                for (i, l) in basis.iter().enumerate() {
+                    assert_eq!(*l, if i == j { Fr::one() } else { Fr::zero() });
+                }
+            }
+            let x = Fr::rand(&mut rng);
+            let sum: Fr = interp.basis_evals(x).iter().sum();
+            assert_eq!(sum, Fr::one());
+            assert!(interp.interpolate(&vec![Fr::one(); n + 1]).is_err());
+        }
+        assert!(FixedInterpolator::new(&[]).is_err());
+        let dup = vec![Fr::one(), Fr::one()];
+        assert!(FixedInterpolator::new(&dup).is_err());
     }
 
     #[test]
