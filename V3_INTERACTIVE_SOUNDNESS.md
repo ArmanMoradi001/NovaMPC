@@ -90,7 +90,9 @@ Assumptions: `N` distinct evaluation points with `N < |F|`
 (params cap `N ≤ 65536`); Merkle/BLAKE3 binding + collision resistance
 (escape hatch); hint/mask distributions needed only for completeness
 (soundness games fix arbitrary committed values); `dβ+2 ≤ N` enforced by
-`validate()`; `dα+1 ≤ N` required for `S` (implied by practice, see F4).
+`validate()`; `dα+1 ≤ N` (hence `d2+1 ≤ N`) verified per preset below
+(299, 319, 21 ≤ respective `N`) — not enforced by `validate()` (F4),
+so it is a checked precondition, not a standing invariant.
 The relation-specific content (combined range+membership, one `x`,
 `m1 = ⌈M/s⌉`, `m2 = 2M+#AssertEq`, appended inputs, zero padding) enters
 only through the LPPC shape the paper's argument already covers.

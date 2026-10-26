@@ -280,3 +280,36 @@ Experimental TCitH-MT/ΠLigero prototype. No security claim. V2 unchanged.
 - Next step: only the F2/open-obligation proof work (extractor, KZ-aware
   τ, QROM-or-classical scope, ZK) or external review can advance claims;
   no implementation work is gated on this phase.
+
+## P7.1 — exact experiment + single-repetition bound (`07971b5`)
+
+- Wrote `V3_INTERACTIVE_SOUNDNESS.md` §§1–2: idealized interactive
+  counterpart of the as-built sequential schedule (τ sequential full
+  reps, fresh uniform challenges per rep/row/batch, accept-iff-all;
+  salt public and shared, independence from fresh verifier coins);
+  adversary adaptive across reps (history = auxiliary input);
+  binding/collision escapes as assumptions. Single-rep bound
+  `ε₁ ≤ p + (1−p)·C(dα,ℓ)/C(N,ℓ) + C(N,dβ+2)/|F|^η` with per-term
+  justification (FP batching, opening/threshold special soundness,
+  Phase 6 DECS lemma) tied to the actual verifier checks and relation
+  shape.
+- Validation: docs only; numbers recomputed independently
+  (`/tmp/p7_recompute.py`).
+
+## P7.2 — τ-composition + numbers + audit updates (`pending hash`)
+
+- Proved `ε_τ ≤ (ε₁)^τ` for the as-built sequential schedule by
+  conditional induction (uniform single-rep game per history slice);
+  documented why BIN parallel-repetition pathology and KZ grinding do
+  not apply to the interactive bound (FS-only), and why shared
+  salt/witness do not couple verifier coins. Stated the bound for the
+  idealized experiment only — the shipped FS object inherits nothing
+  without Phase 8.
+- Recomputed per-preset table (prototype `2^−291.05`, reference
+  combined `2^−127.83`, fast `2^−2.12`); reference combined value is
+  weaker than its threshold term alone — term-by-term accounting
+  matters. Precondition `dα+1 ≤ N` checked per preset (F4 gap noted as
+  checked-precondition, not invariant).
+- Updated `V3_AUDIT.md` (F1 resolution pointer, verdict basis,
+  assumptions, fixes list) to record the delivered per-rep write-up.
+- Validation: no code touched; `git diff` scope checked.

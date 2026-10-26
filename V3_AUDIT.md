@@ -27,7 +27,7 @@ review.
 | Property | Verdict | Basis |
 |---|---|---|
 | Prototype correctness (honest path works; malformed/tampered proofs rejected as implemented) | **GO** | E2E tests pass; every message/check traced prover↔verifier; no logic defect found (findings F3–F8 are non-blocking) |
-| Interactive soundness | **CONDITIONAL** | Check structure matches the paper's mechanism; DECS term re-established for the as-built combination (F1 resolution: variant lemma, same numerical term); composed per-repetition write-up + τ-composition still unproven |
+| Interactive soundness (idealized counterpart) | **CONDITIONAL** | Per-rep bound derived in `V3_INTERACTIVE_SOUNDNESS.md` (unreviewed); τ-composition proved for the as-built sequential schedule; FS-side composition, extraction, review still open |
 | Classical-ROM (Fiat–Shamir) security | **NO-GO** | No extractor accounting for this transcript; no KZ-aware τ proof (F2) |
 | QROM security | **NO-GO** | No applicable result (DFMS19 is 3-round-only); correctly unclaimed |
 | Proof of knowledge | **NO-GO** | No extractor; correctly unclaimed |
@@ -140,8 +140,10 @@ and is covered by the lemma).
 
 F1 verdict evolution: the transfer question is answered for the DECS
 term. Interactive soundness stays CONDITIONAL: the composed
-per-repetition write-up and τ-composition proof are still required
-before any claim (narrowed from the original F1).
+per-repetition write-up is now delivered (unreviewed) in
+`V3_INTERACTIVE_SOUNDNESS.md`; τ-composition for the interactive
+experiment is proved there; FS-side composition, extraction, and review
+remain open.
 
 ### F2 [Medium] — No ROM-FS accounting exists for this exact transcript; KZ-aware τ selection unproven
 
@@ -249,19 +251,20 @@ birthday ceiling `2^126.80`). Interactive per-repetition bound
 
 Assumptions the table depends on (all unproven for the as-built
 transcript): ROM BLAKE3/XOF; PRG hiding; Merkle binding; Poseidon2
-external; `N < |F|`; composed per-repetition write-up + τ-composition
-(F1-resolution lemma covers only the DECS term); straightline
-extraction; classical-only scope. The `Q·ε` column is template
-arithmetic, not a bound. Collision floor `≈ Q²/2^{2λ} ≈ 2^{−128}`
-per round oracle (classical) is consistent with the ≈127-bit field
-ceiling; nothing may target `2^{−128}`.
+external; `N < |F|`; per-rep composition + τ-composition as derived
+(unreviewed) in `V3_INTERACTIVE_SOUNDNESS.md`; straightline extraction;
+classical-only scope. The `Q·ε` column is template arithmetic, not a
+bound. Collision floor `≈ Q²/2^{2λ} ≈ 2^{−128}` per round oracle
+(classical) is consistent with the ≈127-bit field ceiling; nothing may
+target `2^{−128}`.
 
 ## Fixes and proofs required before any security claim
 
-1. Write the composed per-repetition interactive argument for the
-   as-built transcript (FP + threshold/special-soundness terms on top of
-   the Phase 6 DECS lemma) and instantiate it for our LPPC parameters;
-   then the τ-repetition composition (narrowed remainder of F1).
+1. ~~Write the composed per-repetition interactive argument~~ Delivered
+   (unreviewed) in `V3_INTERACTIVE_SOUNDNESS.md` (Phase 7: FP +
+   threshold/special-soundness terms over the Phase 6 DECS lemma;
+   τ-composition proved for the sequential schedule). Still needs
+   independent review; FS-side composition remains Phase 8 work.
 2. Write the KZ-aware τ-selection proof for the exact
    `Γ → (γ,γ') → I` transcript (F2).
 3. Write the classical-ROM straightline-extractor ledger (per-round
